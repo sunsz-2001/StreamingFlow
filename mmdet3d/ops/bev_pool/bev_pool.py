@@ -83,6 +83,16 @@ class QuickCumsumCuda(torch.autograd.Function):
 def bev_pool(feats, coords, B, D, H, W):
     assert feats.shape[0] == coords.shape[0]
 
+    if feats.device.type != 'cuda':
+        batch_idx = coords[:, 3].long()
+        depth_idx = coords[:, 2].long()
+        height_idx = coords[:, 1].long()
+        width_idx = coords[:, 0].long()
+
+        out = torch.zeros(B, D, H, W, feats.shape[1], device=feats.device, dtype=feats.dtype)
+        out.index_put_((batch_idx, depth_idx, height_idx, width_idx), feats, accumulate=True)
+        return out.permute(0, 4, 1, 2, 3).contiguous()
+
     ranks = (
         coords[:, 0] * (W * D * B)
         + coords[:, 1] * (D * B)

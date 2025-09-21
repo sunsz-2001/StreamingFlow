@@ -212,6 +212,7 @@ class streamingflow(nn.Module):
         future_egomotion = future_egomotion[:, :self.receptive_field].contiguous()
         camera_states = None
         lidar_voxel_states = None
+        lidar_states = None
 
         if self.use_lidar:
             points = torch.stack(points).permute(1,0,2,3) # B, T, num_point, C
@@ -254,7 +255,7 @@ class streamingflow(nn.Module):
             #  Temporal model
             camera_states = self.temporal_model(x)
             states = camera_states
-        
+
         if self.n_future > 0:
 
             present_state = states[:, -1:].contiguous()

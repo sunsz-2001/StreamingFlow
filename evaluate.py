@@ -1,3 +1,15 @@
+import os
+os.environ.setdefault('OMP_NUM_THREADS', '1')
+os.environ.setdefault('MKL_NUM_THREADS', '1')
+os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
+os.environ.setdefault('MKL_THREADING_LAYER', 'SEQUENTIAL')
+os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')
+os.environ.setdefault('KMP_AFFINITY', 'disabled')
+os.environ.setdefault('KMP_INIT_AT_FORK', 'FALSE')
+os.environ.setdefault('KMP_BLOCKTIME', '0')
+os.environ.setdefault('KMP_USE_SHM', '0')
+os.environ.setdefault('NUMEXPR_NUM_THREADS', '1')
+
 from argparse import ArgumentParser
 from PIL import Image
 import torch
@@ -10,7 +22,6 @@ import matplotlib
 from matplotlib import pyplot as plt
 import pathlib
 import datetime
-import os
 import time
 from streamingflow.datas.NuscenesData import FuturePredictionDataset
 from streamingflow.trainer import TrainingModule
@@ -27,14 +38,16 @@ def mk_save_dir():
     save_path.mkdir(parents=True, exist_ok=False)
     return save_path
 
-def eval(checkpoint_path, continuous=False, dataroot=None,  n_future_frames=4, draw=False):
+def eval(checkpoint_path, continuous=False, dataroot=None,  n_future_frames=4, draw=True):
     if draw:
         save_path = mk_save_dir()
     trainer = TrainingModule.load_from_checkpoint(checkpoint_path, strict=False)
     print(f'Loaded weights from \n {checkpoint_path}')
     trainer.eval()
 
-    device = torch.device('cuda:0')
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    torch.set_num_threads(1)
+    torch.set_num_interop_threads(1)
     trainer.to(device)
     model = trainer.model
 
@@ -42,7 +55,14 @@ def eval(checkpoint_path, continuous=False, dataroot=None,  n_future_frames=4, d
 
     cfg.N_FUTURE_FRAMES = n_future_frames
 
-    cfg.GPUS = "[0]"
+    cfg.GPUS = "[0]" if device.type == 'cuda' else "[]"
+    if device.type == 'cpu':
+        cfg.N_WORKERS = 0
+        cfg.MODEL.MODALITY.USE_LIDAR = False
+        cfg.MODEL.LIDAR.USE_RANGE = False
+        cfg.MODEL.LIDAR.USE_STPN = False
+        cfg.MODEL.LIDAR.USE_BESTI = False
+        model.use_lidar = False
     cfg.BATCHSIZE = 1
     cfg.DATASET.VERSION = 'trainval'
 
@@ -57,7 +77,9 @@ def eval(checkpoint_path, continuous=False, dataroot=None,  n_future_frames=4, d
         cfg.DATASET.MAP_FOLDER = dataroot
 
 
+    print('Preparing dataloaders...')
     _, valloader = prepare_dataloaders(cfg)
+    print('Dataloaders ready')
     n_classes = len(cfg.SEMANTIC_SEG.VEHICLE.WEIGHTS)
     hdmap_class = cfg.SEMANTIC_SEG.HDMAP.ELEMENTS
     metric_vehicle_val = IntersectionOverUnion(n_classes).to(device)
@@ -79,6 +101,7 @@ def eval(checkpoint_path, continuous=False, dataroot=None,  n_future_frames=4, d
         for i in range(future_second):
             metric_planning_val.append(PlanningMetric(cfg, 2*(i+1)).to(device))
 
+    print('Starting evaluation loop')
     for index, batch in enumerate(tqdm(valloader)):
         preprocess_batch(batch, device)
         image = batch['image']

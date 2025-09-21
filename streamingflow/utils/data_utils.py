@@ -323,10 +323,10 @@ def gen_2d_grid_gt(data_dict: dict, grid_size: np.array, extents: np.array = Non
     # Get the point cloud subsets, which are inside different instance bounding boxes
     refer_box_list = list()
     refer_pc_idx_per_bbox = list()
-    points_category = np.zeros(refer_pc.shape[0], dtype=np.int)  # store the point categories
+    points_category = np.zeros(refer_pc.shape[0], dtype=int)  # store the point categories
 
     pixel_instance_id = np.zeros(pixel_indices.shape[0], dtype=np.uint8)
-    points_instance_id = np.zeros(refer_pc.shape[0], dtype=np.int)
+    points_instance_id = np.zeros(refer_pc.shape[0], dtype=int)
 
     for i in range(num_instances):
         instance_cat = instance_cat_list[i]
@@ -867,7 +867,7 @@ def compute_ratio_cat_and_motion(dataset_root=None, frame_skip=3, voxel_size=(0.
         max_prob = np.amax(pixel_cat_map_gt, axis=-1)
         filter_mask = max_prob == 1.0
         pixel_cat_map = np.argmax(pixel_cat_map_gt, axis=-1) + 1  # category starts from 1 (background), etc
-        pixel_cat_map = (pixel_cat_map * non_empty_map * filter_mask).astype(np.int)
+        pixel_cat_map = (pixel_cat_map * non_empty_map * filter_mask).astype(int)
 
         for i in range(num_obj_cat):
             curr_cat_mask = pixel_cat_map == (i + 1)
@@ -876,7 +876,7 @@ def compute_ratio_cat_and_motion(dataset_root=None, frame_skip=3, voxel_size=(0.
 
         # -- Count the motion category number
         motion_cat_map = np.argmax(motion_status_gt, axis=-1) + 1  # category starts from 1 (static), etc
-        motion_cat_map = (motion_cat_map * non_empty_map * filter_mask).astype(np.int)
+        motion_cat_map = (motion_cat_map * non_empty_map * filter_mask).astype(int)
 
         for i in range(num_motion_cat):
             curr_motion_mask = motion_cat_map == (i + 1)

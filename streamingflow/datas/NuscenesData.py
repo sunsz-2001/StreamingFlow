@@ -1,4 +1,5 @@
 import os
+import warnings
 from PIL import Image
 
 import numpy as np
@@ -50,7 +51,15 @@ class FuturePredictionDataset(torch.utils.data.Dataset):
         self.nusc = nusc
         self.dataroot = self.nusc.dataroot
         self.nusc_exp = NuScenesExplorer(nusc)
-        self.nusc_can = NuScenesCanBus(dataroot=self.dataroot)
+        try:
+            self.nusc_can = NuScenesCanBus(dataroot=self.dataroot)
+            self._has_can_bus = True
+        except Exception as exc:
+            warnings.warn(
+                f"NuScenes CAN bus data unavailable at {self.dataroot}. Proceeding without CAN features. ({exc})"
+            )
+            self.nusc_can = None
+            self._has_can_bus = False
         self.is_train = is_train
         self.cfg = cfg
 
@@ -95,7 +104,10 @@ class FuturePredictionDataset(torch.utils.data.Dataset):
         self.n_samples = self.cfg.PLANNING.SAMPLE_NUM
 
         # HD-map feature extractor
-        self.nusc_maps = get_nusc_maps(self.cfg.DATASET.MAP_FOLDER)
+        if self.cfg.SEMANTIC_SEG.HDMAP.ENABLED:
+            self.nusc_maps = get_nusc_maps(self.cfg.DATASET.MAP_FOLDER)
+        else:
+            self.nusc_maps = {}
         self.scene2map = {}
         for sce in self.nusc.scene:
             log = self.nusc.get('log', sce['log_token'])
@@ -115,7 +127,8 @@ class FuturePredictionDataset(torch.utils.data.Dataset):
             self.nusc.version
         ][self.is_train]
 
-        blacklist = [419] + self.nusc_can.can_blacklist  # # scene-0419 does not have vehicle monitor data
+        can_blacklist = self.nusc_can.can_blacklist if self._has_can_bus else []
+        blacklist = [419] + can_blacklist  # # scene-0419 does not have vehicle monitor data
         blacklist = ['scene-' + str(scene_no).zfill(4) for scene_no in blacklist]
 
         scenes = create_splits_scenes()[split][:]
@@ -314,7 +327,7 @@ class FuturePredictionDataset(torch.utils.data.Dataset):
         points, coloring, im = self.nusc_exp.map_pointcloud_to_image(lidar_sample['token'], cam_sample['token'])
         cam_file_name = os.path.split(cam_sample['filename'])[-1]
         tmp_cam = np.zeros((self.cfg.IMAGE.ORIGINAL_HEIGHT, self.cfg.IMAGE.ORIGINAL_WIDTH))
-        points = points.astype(np.int)
+        points = points.astype(int)
         tmp_cam[points[1, :], points[0,:]] = coloring
 
         return tmp_cam
@@ -506,37 +519,31 @@ class FuturePredictionDataset(torch.utils.data.Dataset):
         if rec is None and sample_indice is not None:
             rec = self.ixes[sample_indice]
 
-        ref_scene = self.nusc.get("scene", rec['scene_token'])
+        if self._has_can_bus:
+            ref_scene = self.nusc.get("scene", rec['scene_token'])
 
-        # vm_msgs = self.nusc_can.get_messages(ref_scene['name'], 'vehicle_monitor')
-        # vm_uts = [msg['utime'] for msg in vm_msgs]
-        pose_msgs = self.nusc_can.get_messages(ref_scene['name'],'pose')
-        pose_uts = [msg['utime'] for msg in pose_msgs]
-        steer_msgs = self.nusc_can.get_messages(ref_scene['name'], 'steeranglefeedback')
-        steer_uts = [msg['utime'] for msg in steer_msgs]
+            pose_msgs = self.nusc_can.get_messages(ref_scene['name'],'pose')
+            pose_uts = [msg['utime'] for msg in pose_msgs]
+            steer_msgs = self.nusc_can.get_messages(ref_scene['name'], 'steeranglefeedback')
+            steer_uts = [msg['utime'] for msg in steer_msgs]
 
-        ref_utime = rec['timestamp']
-        # vm_index = locate_message(vm_uts, ref_utime)
-        # vm_data = vm_msgs[vm_index]
-        pose_index = locate_message(pose_uts, ref_utime)
-        pose_data = pose_msgs[pose_index]
-        steer_index = locate_message(steer_uts, ref_utime)
-        steer_data = steer_msgs[steer_index]
+            ref_utime = rec['timestamp']
+            pose_index = locate_message(pose_uts, ref_utime)
+            pose_data = pose_msgs[pose_index]
+            steer_index = locate_message(steer_uts, ref_utime)
+            steer_data = steer_msgs[steer_index]
 
-        # initial speed
-        # v0 = vm_data["vehicle_speed"] / 3.6  # km/h to m/s
-        v0 = pose_data["vel"][0]  # [0] means longitudinal velocity  m/s
+            v0 = pose_data["vel"][0]  # [0] means longitudinal velocity  m/s
+            steering = steer_data["value"]
 
-        # curvature (positive: turn left)
-        # steering = np.deg2rad(vm_data["steering"])
-        steering = steer_data["value"]
-
-        location = self.scene2map[ref_scene['name']]
-        # flip x axis if in left-hand traffic (singapore)
-        flip_flag = True if location.startswith('singapore') else False
-        if flip_flag:
-            steering *= -1
-        Kappa = 2 * steering / 2.588
+            location = self.scene2map[ref_scene['name']]
+            flip_flag = True if location.startswith('singapore') else False
+            if flip_flag:
+                steering *= -1
+            Kappa = 2 * steering / 2.588
+        else:
+            v0 = 0.0
+            Kappa = 0.0
 
         # initial state
         T0 = np.array([0.0, 1.0])  # define front
@@ -727,14 +734,22 @@ class FuturePredictionDataset(torch.utils.data.Dataset):
         selected_times = unique_times[::frame_skip]
 
         selected_times = selected_times[::-1]
-        
         tmp_pc_list_1 = tmp_pc_list_1[::-1]
-         
 
-        lidar_timestamps =  (curr_sample_data['timestamp'] - np.array(selected_times) * 1e6).astype(np.long)
+        point_dim = pc.shape[0]
+        filled_pc = []
+        for pc_array in tmp_pc_list_1:
+            if pc_array.shape[0] == 0:
+                pc_array = np.zeros((1, point_dim), dtype=np.float32)
+            else:
+                pc_array = pc_array.astype(np.float32, copy=False)
+            filled_pc.append(pc_array)
 
-        # tmp_pc_list_1 = [torch.from_numpy(x).to(torch.float32) for x in tmp_pc_list_1]
-        return tmp_pc_list_1, lidar_timestamps
+        lidar_timestamps = (
+            curr_sample_data['timestamp'] - np.array(selected_times) * 1e6
+        ).astype(np.int64)
+
+        return filled_pc, lidar_timestamps
 
     def __getitem__(self, index):
         """

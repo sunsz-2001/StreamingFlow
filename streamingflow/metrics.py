@@ -3,9 +3,56 @@ from typing import Optional
 import torch
 import torch.nn as nn
 import numpy as np
-from pytorch_lightning.metrics.metric import Metric
-from pytorch_lightning.metrics.functional.classification import stat_scores_multiple_classes
-from pytorch_lightning.metrics.functional.reduction import reduce
+try:
+    from pytorch_lightning.metrics.metric import Metric
+    from pytorch_lightning.metrics.functional.classification import stat_scores_multiple_classes
+    from pytorch_lightning.metrics.functional.reduction import reduce
+except ModuleNotFoundError:
+    from torchmetrics.metric import Metric as _TorchMetric
+
+    class Metric(_TorchMetric):  # type: ignore[misc]
+        def __init__(self, *args, compute_on_step: bool = False, **kwargs):
+            super().__init__(*args, **kwargs)
+
+    def stat_scores_multiple_classes(prediction: torch.Tensor, target: torch.Tensor, n_classes: int):
+        prediction = prediction.view(-1)
+        target = target.view(-1)
+
+        true_positive = prediction.new_zeros(n_classes, dtype=torch.long)
+        false_positive = prediction.new_zeros(n_classes, dtype=torch.long)
+        true_negative = prediction.new_zeros(n_classes, dtype=torch.long)
+        false_negative = prediction.new_zeros(n_classes, dtype=torch.long)
+        support = prediction.new_zeros(n_classes, dtype=torch.long)
+
+        total = prediction.numel()
+
+        for class_idx in range(n_classes):
+            pred_mask = prediction == class_idx
+            target_mask = target == class_idx
+
+            tp = torch.count_nonzero(pred_mask & target_mask)
+            fp = torch.count_nonzero(pred_mask & (~target_mask))
+            fn = torch.count_nonzero((~pred_mask) & target_mask)
+            tn = total - tp - fp - fn
+            sup = torch.count_nonzero(target_mask)
+
+            true_positive[class_idx] = tp
+            false_positive[class_idx] = fp
+            true_negative[class_idx] = tn
+            false_negative[class_idx] = fn
+            support[class_idx] = sup
+
+        return true_positive, false_positive, true_negative, false_negative, support
+
+    def reduce(scores: torch.Tensor, reduction: str = 'none') -> torch.Tensor:
+        reduction = (reduction or 'none').lower()
+        if reduction in ('none', 'elementwise_none'):
+            return scores
+        if reduction in ('elementwise_mean', 'mean'):
+            return scores.mean()
+        if reduction == 'sum':
+            return scores.sum()
+        raise ValueError(f'Unsupported reduction: {reduction}')
 from skimage.draw import polygon
 
 from streamingflow.utils.tools import gen_dx_bx

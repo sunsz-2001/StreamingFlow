@@ -404,7 +404,7 @@ class ObjectPaste:
                 data["img"] = sampled_dict["img"]
 
         data["gt_bboxes_3d"] = gt_bboxes_3d
-        data["gt_labels_3d"] = gt_labels_3d.astype(np.long)
+        data["gt_labels_3d"] = gt_labels_3d.astype(np.int64)
         data["points"] = points
 
         return data

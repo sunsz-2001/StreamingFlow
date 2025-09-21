@@ -1,6 +1,9 @@
 import torch.nn as nn
 import numpy as np
 from efficientnet_pytorch import EfficientNet
+from urllib.error import URLError
+
+import warnings
 
 from streamingflow.layers.convolutions import UpsamplingConcat, DeepLabHead
 
@@ -16,7 +19,13 @@ class Encoder(nn.Module):
         self.downsample = cfg.DOWNSAMPLE
         self.version = cfg.NAME.split('-')[1]
 
-        self.backbone = EfficientNet.from_pretrained(cfg.NAME)
+        try:
+            self.backbone = EfficientNet.from_pretrained(cfg.NAME)
+        except (URLError, PermissionError):
+            warnings.warn(
+                f"Falling back to EfficientNet.from_name for {cfg.NAME} due to pretrained weights download failure."
+            )
+            self.backbone = EfficientNet.from_name(cfg.NAME)
 
         self.delete_unused_layers()
         if self.version == 'b4':
@@ -29,7 +38,7 @@ class Encoder(nn.Module):
             raise NotImplementedError
         self.upsampling_out_channel = [0, 48, 64, 128, 512]
 
-        index = np.log2(self.downsample).astype(np.int)
+        index = np.log2(self.downsample).astype(int)
 
         if self.use_depth_distribution:
             self.depth_layer_1 = DeepLabHead(self.reduction_channel[index+1], self.reduction_channel[index+1], hidden_channel=64)
@@ -100,7 +109,7 @@ class Encoder(nn.Module):
         # Head
         endpoints['reduction_{}'.format(len(endpoints) + 1)] = x
 
-        index = np.log2(self.downsample).astype(np.int)
+        index = np.log2(self.downsample).astype(int)
         input_1 = endpoints['reduction_{}'.format(index + 1)]
         input_2 = endpoints['reduction_{}'.format(index)]
  

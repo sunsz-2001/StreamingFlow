@@ -347,7 +347,7 @@ class FuturePredictionDatasetLyft(torch.utils.data.Dataset):
         points, coloring, im = self.nusc_exp.map_pointcloud_to_image(lidar_sample['token'], cam_sample['token'])
         cam_file_name = os.path.split(cam_sample['filename'])[-1]
         tmp_cam = np.zeros((self.cfg.IMAGE.ORIGINAL_HEIGHT, self.cfg.IMAGE.ORIGINAL_WIDTH))
-        points = points.astype(np.int)
+        points = points.astype(int)
         tmp_cam[points[1, :], points[0,:]] = coloring
 
         return tmp_cam

@@ -325,7 +325,7 @@ class LoadBEVSegmentation:
         masks = masks.astype(np.bool)
 
         num_classes = len(self.classes)
-        labels = np.zeros((num_classes, *self.canvas_size), dtype=np.long)
+        labels = np.zeros((num_classes, *self.canvas_size), dtype=np.int64)
         for k, name in enumerate(self.classes):
             for layer_name in mappings[name]:
                 index = layer_names.index(layer_name)
