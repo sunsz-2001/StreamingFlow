@@ -88,7 +88,7 @@ class NNFOwithBayesianJumps(torch.nn.Module):
             skip (List[Tensor] | None): 可选的跳连信息，来自编码器，用于恢复空间细节。
 
         Returns:
-            Tensor: 解码后的 BEV 特征，形状 ``[B*T, C, H, W]``
+            Tensor: 解码后的 BEV 特征，保持 ``[B, T, C, H, W]`` 形状。
         """
         b, t, c, h, w = x.shape
         _x = x.reshape(b * t, c, h, w)
@@ -96,7 +96,7 @@ class NNFOwithBayesianJumps(torch.nn.Module):
             skip = [s.unsqueeze(1).expand(b, t, *s.shape[1:]) for s in skip]
             skip = [s.reshape(t * b, *s.shape[2:]) for s in skip]
         x_out = self.srvp_decoder(_x, skip=skip)
-        return x_out  # Return flattened output as expected by tests
+        return x_out.view(b, t, *x_out.shape[1:])
 
     def srvp_encode(self, x):
         """把 BEV 特征编码到 SRVP 潜空间，方便 ODE 处理。
