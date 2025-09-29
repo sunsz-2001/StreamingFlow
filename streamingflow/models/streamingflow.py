@@ -14,7 +14,7 @@ from streamingflow.utils.geometry import calculate_birds_eye_view_parameters, Vo
 
 import yaml
 
-from streamingflow.models.future_prediction_ode import FuturePredictionODE
+from streamingflow.ode_modules.cores.future_predictor import FuturePredictionODE
 import time
 
 from mmdet3d.ops import bev_pool
@@ -171,9 +171,14 @@ class streamingflow(nn.Module):
     @force_fp32()
     def voxelize(self, points):
         feats, coords, sizes = [], [], []
-        for k, res in enumerate(points):  
+        for k, res in enumerate(points):
             if res.device.type == 'cpu':
-                res = res.cuda()     
+                res = res.cuda()
+
+            # Skip empty point clouds to avoid CUDA kernel errors
+            if res.numel() == 0 or res.shape[0] == 0:
+                continue
+
             ret = self.encoders["lidar"]["voxelize"](res)
             if len(ret) == 3:
                 # hard voxelize
@@ -201,6 +206,13 @@ class streamingflow(nn.Module):
 
     def extract_lidar_features(self, x) -> torch.Tensor:
         feats, coords, sizes = self.voxelize(x)
+
+        # Check if coords is empty to avoid CUDA kernel launch error
+        if coords.numel() == 0:
+            # Return empty tensor with appropriate shape
+            return torch.zeros((0, self.encoders["lidar"]["backbone"].out_channels),
+                             device=feats.device, dtype=feats.dtype)
+
         batch_size = coords[-1, 0] + 1
         x = self.encoders["lidar"]["backbone"](feats, coords, batch_size, sizes=sizes)
 
