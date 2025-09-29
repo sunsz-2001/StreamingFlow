@@ -1,0 +1,66 @@
+# ODE模块配置模板
+# 这个文件包含了ODE模块所需的所有配置参数
+
+# === 基础模型配置 ===
+MODEL:
+  # --- 核心ODE参数 (必需) ---
+  IMPUTE: False                    # 是否启用缺失数据填充
+  SOLVER: 'euler'                  # ODE求解器: 'euler' 或 'midpoint' 或 'dopri5'
+
+  # --- 编码器配置 (必需) ---
+  ENCODER:
+    OUT_CHANNELS: 64               # 编码器输出通道数 (常用: 64, 128, 256)
+    NAME: 'efficientnet-b4'        # 编码器名称 (可选)
+    USE_DEPTH_DISTRIBUTION: True   # 是否使用深度分布 (可选)
+    DOWNSAMPLE: 8                  # 下采样倍数 (可选)
+
+  # --- 小编码器配置 (必需) ---
+  SMALL_ENCODER:
+    FILTER_SIZE: 64                # 过滤器大小 (通常与OUT_CHANNELS相同)
+    SKIPCO: False                  # 是否使用跳跃连接
+
+  # --- 未来预测配置 ---
+  FUTURE_PRED:
+    USE_VARIABLE_ODE_STEP: False   # 是否使用变步长求解
+    N_GRU_BLOCKS: 2                # 空间GRU层数
+    N_RES_LAYERS: 1                # 残差块层数
+    MIXTURE: True                  # 是否使用混合分布
+    DELTA_T: 0.05                  # 时间步长
+
+  # --- 分布配置 ---
+  DISTRIBUTION:
+    LATENT_DIM: 64                 # 隐藏层维度 (通常与OUT_CHANNELS相同)
+    MIN_LOG_SIGMA: -5.0            # 最小对数方差
+    MAX_LOG_SIGMA: 5.0             # 最大对数方差
+
+# === 常用配置组合示例 ===
+
+# 轻量级配置 (快速测试)
+# MODEL:
+#   ENCODER:
+#     OUT_CHANNELS: 32
+#   DISTRIBUTION:
+#     LATENT_DIM: 32
+#   SMALL_ENCODER:
+#     FILTER_SIZE: 32
+
+# 标准配置 (推荐)
+# MODEL:
+#   ENCODER:
+#     OUT_CHANNELS: 64
+#   DISTRIBUTION:
+#     LATENT_DIM: 64
+#   SMALL_ENCODER:
+#     FILTER_SIZE: 64
+
+# 高性能配置 (大模型)
+# MODEL:
+#   ENCODER:
+#     OUT_CHANNELS: 256
+#   DISTRIBUTION:
+#     LATENT_DIM: 256
+#   SMALL_ENCODER:
+#     FILTER_SIZE: 256
+#   FUTURE_PRED:
+#     N_GRU_BLOCKS: 4
+#     N_RES_LAYERS: 2
