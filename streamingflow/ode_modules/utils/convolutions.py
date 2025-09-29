@@ -186,16 +186,77 @@ class Bottleblock(nn.Module):
         return out
 
 
+class ASPPConv(nn.Sequential):
+    """Atrous convolution branch used in ASPP."""
+
+    def __init__(self, in_channels, out_channels, dilation):
+        super().__init__(
+            nn.Conv2d(in_channels, out_channels, 3, padding=dilation, dilation=dilation, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+        )
+
+
+class ASPPPooling(nn.Sequential):
+    """Image-level pooling branch for ASPP."""
+
+    def __init__(self, in_channels, out_channels):
+        super().__init__(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(in_channels, out_channels, 1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+        )
+
+    def forward(self, x):
+        size = x.shape[-2:]
+        res = super().forward(x)
+        return F.interpolate(res, size=size, mode='bilinear', align_corners=False)
+
+
+class ASPP(nn.Module):
+    """Atrous Spatial Pyramid Pooling module."""
+
+    def __init__(self, in_channels, atrous_rates, out_channels=256):
+        super().__init__()
+
+        branches = [
+            nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, 1, bias=False),
+                nn.BatchNorm2d(out_channels),
+                nn.ReLU(inplace=True),
+            )
+        ]
+
+        for rate in atrous_rates:
+            branches.append(ASPPConv(in_channels, out_channels, rate))
+
+        branches.append(ASPPPooling(in_channels, out_channels))
+
+        self.convs = nn.ModuleList(branches)
+        self.project = nn.Sequential(
+            nn.Conv2d(len(self.convs) * out_channels, out_channels, 1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.5),
+        )
+
+    def forward(self, x):
+        res = [conv(x) for conv in self.convs]
+        res = torch.cat(res, dim=1)
+        return self.project(res)
+
+
 class DeepLabHead(nn.Sequential):
     """DeepLab head for segmentation tasks."""
 
     def __init__(self, in_channels, out_channels, mid_channels=256):
         super().__init__(
-            nn.Conv2d(in_channels, mid_channels, 3, padding=1, bias=False),
+            ASPP(in_channels, [12, 24, 36], mid_channels),
+            nn.Conv2d(mid_channels, mid_channels, 3, padding=1, bias=False),
             nn.BatchNorm2d(mid_channels),
             nn.ReLU(inplace=True),
-            nn.Dropout(0.1),
-            nn.Conv2d(mid_channels, out_channels, 1)
+            nn.Conv2d(mid_channels, out_channels, 1),
         )
 
 
