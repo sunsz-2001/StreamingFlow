@@ -15,10 +15,10 @@ TIME_RECEPTIVE_FIELD: 3
 N_FUTURE_FRAMES: 4
 
 LIFT:
-  GT_DEPTH: True
+  GT_DEPTH: False
 
 GEN:
-  GEN_DEPTH: True
+  GEN_DEPTH: False
   GEN_RANGE: True
   GEN_VOXELS: True
 
@@ -31,7 +31,7 @@ MODEL:
   MODALITY:
     USE_LIDAR: True
     USE_RADAR: False
-    USE_CAMERA: True
+    USE_CAMERA: False
   ENCODER:
     NAME: 'efficientnet-b4'
     USE_DEPTH_DISTRIBUTION: True

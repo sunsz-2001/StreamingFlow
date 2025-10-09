@@ -139,3 +139,4 @@ data/
 logs/
 checkpoints/
 *.mp4
+pretrained/

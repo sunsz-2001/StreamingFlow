@@ -33,9 +33,9 @@ _C = CN()
 _C.LOG_DIR = 'logs'
 _C.TAG = 'default'
 
-_C.GPUS = [0]  # which gpus to use
-_C.PRECISION = 32  # 16bit or 32bit
-_C.BATCHSIZE = 3
+_C.GPUS = [0,1,2,3]  # which gpus to use
+_C.PRECISION = 16  # 16bit or 32bit
+_C.BATCHSIZE = 2
 _C.EPOCHS = 20
 
 _C.N_WORKERS = 5

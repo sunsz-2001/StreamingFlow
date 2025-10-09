@@ -67,7 +67,7 @@ def main():
         dirpath=save_dir,
         save_top_k=-1,
         save_last=False,
-        period=1,
+        every_n_epochs=1,
         mode='max'
     )
 
