@@ -55,13 +55,13 @@ def eval(checkpoint_path, continuous=False, dataroot=None,  n_future_frames=4, d
 
     cfg.N_FUTURE_FRAMES = n_future_frames
 
-    # Lidar-only switch for testing without camera/vision branch
+    # LiDAR-only testing is optional via flag
     if lidar_only:
         cfg.MODEL.MODALITY.USE_CAMERA = False
         cfg.LIFT.GT_DEPTH = False
         cfg.GEN.GEN_DEPTH = False
         cfg.PLANNING.ENABLED = False  # planning depends on cam_front features
-        # Make sure lidar is enabled on model instance
+        # Make sure model ignores camera path
         model.use_camera = False
 
     cfg.GPUS = "[0]" if device.type == 'cuda' else "[]"
