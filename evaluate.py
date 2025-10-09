@@ -38,7 +38,7 @@ def mk_save_dir():
     save_path.mkdir(parents=True, exist_ok=False)
     return save_path
 
-def eval(checkpoint_path, continuous=False, dataroot=None,  n_future_frames=4, draw=True):
+def eval(checkpoint_path, continuous=False, dataroot=None,  n_future_frames=4, draw=True, lidar_only=False):
     if draw:
         save_path = mk_save_dir()
     trainer = TrainingModule.load_from_checkpoint(checkpoint_path, strict=False)
@@ -54,6 +54,15 @@ def eval(checkpoint_path, continuous=False, dataroot=None,  n_future_frames=4, d
     cfg = model.cfg
 
     cfg.N_FUTURE_FRAMES = n_future_frames
+
+    # Lidar-only switch for testing without camera/vision branch
+    if lidar_only:
+        cfg.MODEL.MODALITY.USE_CAMERA = False
+        cfg.LIFT.GT_DEPTH = False
+        cfg.GEN.GEN_DEPTH = False
+        cfg.PLANNING.ENABLED = False  # planning depends on cam_front features
+        # Make sure lidar is enabled on model instance
+        model.use_camera = False
 
     cfg.GPUS = "[0]" if device.type == 'cuda' else "[]"
     if device.type == 'cpu':
@@ -363,10 +372,11 @@ if __name__ == '__main__':
     parser.add_argument('--dataroot', default=None, type=str)
     parser.add_argument('--continuous', default=False, type=bool)
     parser.add_argument('--future-frames', default=4, type=int)
+    parser.add_argument('--lidar-only', action='store_true', help='Evaluate using LiDAR only (disable vision path)')
 
     args = parser.parse_args()
 
-    eval(args.checkpoint, args.continuous, args.dataroot, args.future_frames)
+    eval(args.checkpoint, args.continuous, args.dataroot, args.future_frames, lidar_only=args.lidar_only)
 
 
 # tensor([0.9852, 0.4515], device='cuda:0')

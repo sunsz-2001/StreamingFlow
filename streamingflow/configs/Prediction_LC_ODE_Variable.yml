@@ -15,9 +15,11 @@ TIME_RECEPTIVE_FIELD: 3
 N_FUTURE_FRAMES: 4
 
 LIFT:
+  # Disable GT depth when no camera is used
   GT_DEPTH: False
 
 GEN:
+  # Do not generate per-camera depth for radar/LiDAR-only runs
   GEN_DEPTH: False
   GEN_RANGE: True
   GEN_VOXELS: True
@@ -31,6 +33,7 @@ MODEL:
   MODALITY:
     USE_LIDAR: True
     USE_RADAR: False
+    # Disable vision module for radar/LiDAR-only testing
     USE_CAMERA: False
   ENCODER:
     NAME: 'efficientnet-b4'
