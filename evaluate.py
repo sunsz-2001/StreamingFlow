@@ -38,7 +38,8 @@ def mk_save_dir():
     save_path.mkdir(parents=True, exist_ok=False)
     return save_path
 
-def eval(checkpoint_path, continuous=False, dataroot=None,  n_future_frames=4, draw=True, lidar_only=False):
+def eval(checkpoint_path, continuous=False, dataroot=None,  n_future_frames=4, draw=True, lidar_only=False,
+         camera_multisweeps=False, camera_stride=2, camera_max_sweeps=6, camera_set_hi=None):
     if draw:
         save_path = mk_save_dir()
     trainer = TrainingModule.load_from_checkpoint(checkpoint_path, strict=False)
@@ -84,6 +85,14 @@ def eval(checkpoint_path, continuous=False, dataroot=None,  n_future_frames=4, d
     if dataroot:
         cfg.DATASET.DATAROOT = dataroot
         cfg.DATASET.MAP_FOLDER = dataroot
+
+    # Optional: enable high-frequency camera observations for ODE
+    if camera_multisweeps:
+        cfg.DATASET.CAMERA_MULTISWEEP = True
+        cfg.DATASET.CAMERA_SWEEP_STRIDE = camera_stride
+        cfg.DATASET.CAMERA_MAX_SWEEPS = camera_max_sweeps
+        if camera_set_hi:
+            cfg.DATASET.CAMERA_SET_HI = camera_set_hi
 
 
     print('Preparing dataloaders...')
@@ -146,9 +155,19 @@ def eval(checkpoint_path, continuous=False, dataroot=None,  n_future_frames=4, d
 
         t0 = time.time()
 
+        # Prepare optional high-frequency camera observations
+        image_hi = intrinsics_hi = extrinsics_hi = camera_timestamps_hi = None
+        if camera_multisweeps and 'image_hi' in batch:
+            image_hi = batch['image_hi']
+            intrinsics_hi = batch['intrinsics_hi']
+            extrinsics_hi = batch['extrinsics_hi']
+            # Convert timestamps to torch tensor on device (seconds)
+            camera_timestamps_hi = torch.as_tensor(batch['camera_timestamp_hi'], dtype=image.dtype, device=image.device)
+
         with torch.no_grad():
             output = model(
                 image, intrinsics, extrinsics, future_egomotion ,padded_voxel_points,camera_timestamps, points, lidar_timestamps, target_timestamp,
+                image_hi=image_hi, intrinsics_hi=intrinsics_hi, extrinsics_hi=extrinsics_hi, camera_timestamp_hi=camera_timestamps_hi,
             )
         t1 = time.time()
 
@@ -373,10 +392,25 @@ if __name__ == '__main__':
     parser.add_argument('--continuous', default=False, type=bool)
     parser.add_argument('--future-frames', default=4, type=int)
     parser.add_argument('--lidar-only', action='store_true', help='Evaluate using LiDAR only (disable vision path)')
+    parser.add_argument('--camera-multisweeps', action='store_true', help='Enable high-frequency camera observations for ODE')
+    parser.add_argument('--camera-stride', default=2, type=int, help='Subsampling stride for camera non-keyframe sweeps')
+    parser.add_argument('--camera-max-sweeps', default=6, type=int, help='Max number of camera sweeps within window')
+    parser.add_argument('--camera-set-hi', default=None, type=str, help='Comma-separated camera names (e.g., CAM_FRONT,CAM_FRONT_LEFT)')
 
     args = parser.parse_args()
 
-    eval(args.checkpoint, args.continuous, args.dataroot, args.future_frames, lidar_only=args.lidar_only)
+    camera_set = args.camera_set_hi.split(',') if args.camera_set_hi else None
+    eval(
+        args.checkpoint,
+        args.continuous,
+        args.dataroot,
+        args.future_frames,
+        lidar_only=args.lidar_only,
+        camera_multisweeps=args.camera_multisweeps,
+        camera_stride=args.camera_stride,
+        camera_max_sweeps=args.camera_max_sweeps,
+        camera_set_hi=camera_set,
+    )
 
 
 # tensor([0.9852, 0.4515], device='cuda:0')

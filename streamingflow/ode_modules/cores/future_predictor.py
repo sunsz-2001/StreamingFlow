@@ -53,6 +53,8 @@ class FuturePredictionODE(nn.Module):
         camera_timestamp,
         lidar_timestamp,
         target_timestamp,
+        camera_states_hi=None,
+        camera_timestamp_hi=None,
     ):
         batch_outputs = []
         # Support LiDAR-only or Camera-only by deriving batch size from input
@@ -65,9 +67,13 @@ class FuturePredictionODE(nn.Module):
             if lidar_states is not None:
                 for index in range(lidar_timestamp.shape[1]):
                     obs_feature_with_time[lidar_timestamp[bs, index]] = lidar_states[bs, index].unsqueeze(0)
+            if camera_states_hi is not None and camera_timestamp_hi is not None:
+                for index in range(camera_timestamp_hi.shape[1]):
+                    obs_feature_with_time[camera_timestamp_hi[bs, index]] = camera_states_hi[bs, index].unsqueeze(0)
 
             obs = dict(sorted(obs_feature_with_time.items(), key=lambda v: v[0]))
-            times = torch.tensor(list(obs.keys()), device=future_prediction_input.device, dtype=target_timestamp.dtype)
+            # Use model input dtype/device to avoid dtype mismatches
+            times = torch.tensor(list(obs.keys()), device=future_prediction_input.device, dtype=future_prediction_input.dtype)
             observations = torch.stack(list(obs.values()), dim=1)
 
             _, auxilary_loss, predict_x = self.gru_ode(

@@ -218,7 +218,8 @@ class streamingflow(nn.Module):
 
         return x
 
-    def forward(self, image, intrinsics, extrinsics, future_egomotion, padded_voxel_points=None, camera_timestamp=None, points=None,lidar_timestamp=None, target_timestamp=None):
+    def forward(self, image, intrinsics, extrinsics, future_egomotion, padded_voxel_points=None, camera_timestamp=None, points=None,lidar_timestamp=None, target_timestamp=None,
+                image_hi=None, intrinsics_hi=None, extrinsics_hi=None, camera_timestamp_hi=None):
         output = {}
 
         future_egomotion = future_egomotion[:, :self.receptive_field].contiguous()
@@ -268,13 +269,42 @@ class streamingflow(nn.Module):
             camera_states = self.temporal_model(x)
             states = camera_states
 
+        # Optional: build high-frequency camera states (single-frame lifting as ODE observations)
+        camera_states_hi = None
+        if self.use_camera and image_hi is not None and intrinsics_hi is not None and extrinsics_hi is not None and camera_timestamp_hi is not None:
+            # Accept either [S_cam,N,3,H,W] or [B,S_cam,N,3,H,W]
+            if image_hi.dim() == 5:
+                image_hi_b = image_hi.unsqueeze(0)
+                intrinsics_hi_b = intrinsics_hi.unsqueeze(0)
+                extrinsics_hi_b = extrinsics_hi.unsqueeze(0)
+            else:
+                image_hi_b = image_hi
+                intrinsics_hi_b = intrinsics_hi
+                extrinsics_hi_b = extrinsics_hi
+
+            b, S_cam = image_hi_b.shape[0], image_hi_b.shape[1]
+            zeros_ego = torch.zeros((b, S_cam, 6), device=image_hi_b.device, dtype=image_hi_b.dtype)
+            x_hi, _, _ = self.calculate_birds_eye_view_features(
+                image_hi_b, intrinsics_hi_b, extrinsics_hi_b, zeros_ego
+            )
+            camera_states_hi = x_hi.contiguous()  # [B, S_cam, C, H, W]
+
         if self.n_future > 0:
 
             present_state = states[:, -1:].contiguous()
         
             future_prediction_input = present_state # not used actually
             
-            states, auxilary_loss = self.future_prediction_ode(future_prediction_input, camera_states, lidar_states, camera_timestamp, lidar_timestamp,target_timestamp)
+            states, auxilary_loss = self.future_prediction_ode(
+                future_prediction_input,
+                camera_states,
+                lidar_states,
+                camera_timestamp,
+                lidar_timestamp,
+                target_timestamp,
+                camera_states_hi=camera_states_hi,
+                camera_timestamp_hi=camera_timestamp_hi,
+            )
     
             # predict BEV outputs
             bev_output = self.decoder(states)

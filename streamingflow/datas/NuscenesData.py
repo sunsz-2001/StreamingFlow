@@ -120,6 +120,136 @@ class FuturePredictionDataset(torch.utils.data.Dataset):
         # else:
         #     self.rv_config = yaml.load(open(rv_config_filename))
 
+    def get_camera_multisweeps(self, rec_ref, window_sec, stride, max_sweeps, camera_set=None):
+        """Collect non-keyframe camera sample_data as high-frequency observations within a time window.
+
+        Returns lists (time-ascending):
+            images_hi: List[Tensor (N,3,H,W)]
+            intrinsics_hi: List[Tensor (N,3,3)]
+            extrinsics_hi: List[Tensor (N,4,4)] (sensor_to_lidar)
+            timestamps_hi: List[int] (absolute microseconds)
+        """
+        try:
+            ref_sd_rec = self.nusc.get('sample_data', rec_ref['data']['LIDAR_TOP'])
+        except Exception:
+            return [], [], [], []
+
+        t_ref = ref_sd_rec['timestamp']
+        if window_sec is None:
+            # default to match receptive field window
+            window_sec = max(0.0, 0.5 * (self.receptive_field - 1))
+        t_min = int(t_ref - window_sec * 1e6)
+
+        # Build lidar_to_world at reference time (same as in get_input_data)
+        lidar_pose = self.nusc.get('ego_pose', ref_sd_rec['ego_pose_token'])
+        yaw = Quaternion(lidar_pose['rotation']).yaw_pitch_roll[0]
+        lidar_rotation = Quaternion(scalar=np.cos(yaw / 2), vector=[0, 0, np.sin(yaw / 2)])
+        lidar_translation = np.array(lidar_pose['translation'])[:, None]
+        lidar_to_world = np.vstack([
+            np.hstack((lidar_rotation.rotation_matrix, lidar_translation)),
+            np.array([0, 0, 0, 1])
+        ])
+
+        # Use specified cameras or default to front camera only (to avoid cross-camera timestamp alignment complexity)
+        cameras = camera_set if (camera_set is not None and len(camera_set) > 0) else ['CAM_FRONT']
+
+        # Gather frames as (timestamp -> list of per-camera tuples)
+        buckets = {}
+
+        for cam in cameras:
+            sd = self.nusc.get('sample_data', rec_ref['data'][cam])
+            step = 0
+            cur = sd
+            # Walk prev chain to collect in-window, non-keyframe samples
+            while True:
+                if cur is None or cur['prev'] == "":
+                    break
+                cur = self.nusc.get('sample_data', cur['prev'])
+                if cur is None:
+                    break
+                if cur['timestamp'] < t_min:
+                    break
+                if cur['is_key_frame']:
+                    break
+                if (step % max(1, int(stride))) != 0:
+                    step += 1
+                    continue
+
+                # Load calibration and ego pose for this camera frame
+                car_egopose = self.nusc.get('ego_pose', cur['ego_pose_token'])
+                egopose_rotation = Quaternion(car_egopose['rotation']).inverse
+                egopose_translation = -np.array(car_egopose['translation'])[:, None]
+                world_to_car_egopose = np.vstack([
+                    np.hstack((egopose_rotation.rotation_matrix, egopose_rotation.rotation_matrix @ egopose_translation)),
+                    np.array([0, 0, 0, 1])
+                ])
+
+                sensor_sample = self.nusc.get('calibrated_sensor', cur['calibrated_sensor_token'])
+                intrinsic = torch.Tensor(sensor_sample['camera_intrinsic'])
+                sensor_rotation = Quaternion(sensor_sample['rotation'])
+                sensor_translation = np.array(sensor_sample['translation'])[:, None]
+                car_egopose_to_sensor = np.vstack([
+                    np.hstack((sensor_rotation.rotation_matrix, sensor_translation)),
+                    np.array([0, 0, 0, 1])
+                ])
+                car_egopose_to_sensor = np.linalg.inv(car_egopose_to_sensor)
+
+                lidar_to_sensor = car_egopose_to_sensor @ world_to_car_egopose @ lidar_to_world
+                sensor_to_lidar = torch.from_numpy(np.linalg.inv(lidar_to_sensor)).float()
+
+                # Load and preprocess image
+                image_filename = os.path.join(self.dataroot, cur['filename'])
+                img = Image.open(image_filename)
+                # Resize and crop
+                img = resize_and_crop_image(
+                    img, resize_dims=self.augmentation_parameters['resize_dims'], crop=self.augmentation_parameters['crop']
+                )
+                # Normalise image
+                normalised_img = self.normalise_image(img)
+
+                # Adjust intrinsics for resize/crop
+                top_crop = self.augmentation_parameters['crop'][1]
+                left_crop = self.augmentation_parameters['crop'][0]
+                intrinsic_upd = update_intrinsics(
+                    intrinsic, top_crop, left_crop,
+                    scale_width=self.augmentation_parameters['scale_width'],
+                    scale_height=self.augmentation_parameters['scale_height']
+                )
+
+                ts = cur['timestamp']
+                if ts not in buckets:
+                    buckets[ts] = {'images': [], 'intrinsics': [], 'extrinsics': []}
+                buckets[ts]['images'].append(normalised_img.unsqueeze(0))  # (1,3,H,W)
+                buckets[ts]['intrinsics'].append(intrinsic_upd.unsqueeze(0))  # (1,3,3)
+                buckets[ts]['extrinsics'].append(sensor_to_lidar.unsqueeze(0))  # (1,4,4)
+
+                step += 1
+
+        if len(buckets) == 0:
+            return [], [], [], []
+
+        # Sort timestamps ascending and cap to max_sweeps most recent
+        timestamps_sorted = sorted(buckets.keys())
+        if max_sweeps is not None and max_sweeps > 0:
+            timestamps_sorted = timestamps_sorted[-int(max_sweeps):]
+
+        images_hi, intrinsics_hi, extrinsics_hi, timestamps_hi = [], [], [], []
+        for ts in timestamps_sorted:
+            pack = buckets[ts]
+            # Stack along camera dimension N
+            images_hi.append(torch.cat(pack['images'], dim=0).unsqueeze(0))       # (1,N,3,H,W)
+            intrinsics_hi.append(torch.cat(pack['intrinsics'], dim=0).unsqueeze(0))  # (1,N,3,3)
+            extrinsics_hi.append(torch.cat(pack['extrinsics'], dim=0).unsqueeze(0))  # (1,N,4,4)
+            timestamps_hi.append(ts)
+
+        # Concatenate along time dimension S_cam
+        # Final shapes: [S_cam, N, ...]
+        images_hi = [t.squeeze(0) for t in images_hi]
+        intrinsics_hi = [t.squeeze(0) for t in intrinsics_hi]
+        extrinsics_hi = [t.squeeze(0) for t in extrinsics_hi]
+
+        return images_hi, intrinsics_hi, extrinsics_hi, timestamps_hi
+
     def get_scenes(self):
         # filter by scene split
         split = {'v1.0-trainval': {0: 'train', 1: 'val', 2: 'test'},
@@ -900,6 +1030,22 @@ class FuturePredictionDataset(torch.utils.data.Dataset):
         if self.cfg.MODEL.MODALITY.USE_RADAR:
             data['radar_pointclouds'] = torch.cat(data['radar_pointclouds'], dim=0)       
         
+        # Optional: high-frequency camera multisweep (asynchronous camera observations)
+        if getattr(self.cfg.DATASET, 'CAMERA_MULTISWEEP', False):
+            window_sec = self.cfg.DATASET.CAMERA_WINDOW_SEC
+            stride = self.cfg.DATASET.CAMERA_SWEEP_STRIDE
+            max_sweeps = self.cfg.DATASET.CAMERA_MAX_SWEEPS
+            camera_set = self.cfg.DATASET.CAMERA_SET_HI if hasattr(self.cfg.DATASET, 'CAMERA_SET_HI') else None
+            images_hi, intrinsics_hi, extrinsics_hi, timestamps_hi = self.get_camera_multisweeps(
+                rec_ref, window_sec, stride, max_sweeps, camera_set
+            )
+            if len(timestamps_hi) > 0:
+                # Stack along time dimension
+                data['image_hi'] = torch.stack(images_hi, dim=0)            # [S_cam, N, 3, H, W]
+                data['intrinsics_hi'] = torch.stack(intrinsics_hi, dim=0)   # [S_cam, N, 3, 3]
+                data['extrinsics_hi'] = torch.stack(extrinsics_hi, dim=0)   # [S_cam, N, 4, 4]
+                data['camera_timestamp_hi'] = np.array(timestamps_hi)
+
         data['target_point'] = torch.tensor([0., 0.])
         instance_centerness, instance_offset, instance_flow = convert_instance_mask_to_center_and_offset_label(
             data['instance'], data['future_egomotion'],
@@ -917,6 +1063,10 @@ class FuturePredictionDataset(torch.utils.data.Dataset):
         data['lidar_timestamp'] = (data['lidar_timestamp'] - current_time) / 1e6
 
         data['target_timestamp'] = np.array(data['target_timestamp'])
-        data['target_timestamp'] = (data['target_timestamp'] - current_time) / 1e6        
+        data['target_timestamp'] = (data['target_timestamp'] - current_time) / 1e6
+
+        # Normalise hi-frequency camera timestamps if present
+        if 'camera_timestamp_hi' in data:
+            data['camera_timestamp_hi'] = (data['camera_timestamp_hi'] - current_time) / 1e6
 
         return data
