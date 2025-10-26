@@ -5,12 +5,14 @@ import numpy as np
 from mmcv.runner import auto_fp16, force_fp32
 
 from streamingflow.models.encoder import Encoder
+from streamingflow.models.event_encoder_evrt import EventEncoderEvRT
 from streamingflow.models.temporal_model import TemporalModelIdentity, TemporalModel
 from streamingflow.models.distributions import DistributionModule
 from streamingflow.models.decoder import Decoder
 from streamingflow.models.planning_model import Planning
 from streamingflow.utils.network import pack_sequence_dim, unpack_sequence_dim, set_bn_momentum
 from streamingflow.utils.geometry import calculate_birds_eye_view_parameters, VoxelsSumming, pose_vec2mat
+from streamingflow.utils.event_tensor import EventTensorizer
 
 import yaml
 
@@ -43,6 +45,8 @@ class streamingflow(nn.Module):
         self.use_radar = self.cfg.MODEL.MODALITY.USE_RADAR
         self.use_lidar = self.cfg.MODEL.MODALITY.USE_LIDAR
         self.use_camera = self.cfg.MODEL.MODALITY.USE_CAMERA
+        self.use_event = getattr(self.cfg.MODEL.MODALITY, "USE_EVENT", False)
+        self.event_tensorizer = None
 
         if self.cfg.TIME_RECEPTIVE_FIELD == 1:
             assert self.cfg.MODEL.TEMPORAL_MODEL.NAME == 'identity'
@@ -59,6 +63,30 @@ class streamingflow(nn.Module):
         if self.use_camera:
         # Encoder
             self.encoder = Encoder(cfg=self.cfg.MODEL.ENCODER, D=self.depth_channels)
+            if self.use_event:
+                self.event_encoder = EventEncoderEvRT(
+                    cfg=self.cfg.MODEL.EVENT,
+                    out_channels=self.encoder_out_channels,
+                )
+                self.event_channels = self.event_encoder.out_channels
+                self.event_fusion_type = getattr(self.cfg.MODEL.EVENT, "FUSION_TYPE", "concat")
+                if self.event_fusion_type == "concat":
+                    self.event_fusion = nn.Linear(
+                        self.encoder_out_channels + self.event_channels,
+                        self.encoder_out_channels,
+                    )
+                elif self.event_fusion_type == "residual":
+                    if self.event_channels != self.encoder_out_channels:
+                        raise ValueError(
+                            "Event encoder output channels must equal camera encoder channels for residual fusion."
+                        )
+                    init_gate = float(getattr(self.cfg.MODEL.EVENT, "RESIDUAL_INIT", 0.0))
+                    self.event_gate = nn.Parameter(
+                        torch.full((self.encoder_out_channels,), init_gate, dtype=torch.float)
+                    )
+                else:
+                    raise ValueError(f"Unsupported event fusion type: {self.event_fusion_type}")
+                self.event_tensorizer = None
         
         if self.use_camera:
             # Temporal model
@@ -219,7 +247,7 @@ class streamingflow(nn.Module):
         return x
 
     def forward(self, image, intrinsics, extrinsics, future_egomotion, padded_voxel_points=None, camera_timestamp=None, points=None,lidar_timestamp=None, target_timestamp=None,
-                image_hi=None, intrinsics_hi=None, extrinsics_hi=None, camera_timestamp_hi=None):
+                image_hi=None, intrinsics_hi=None, extrinsics_hi=None, camera_timestamp_hi=None, event=None):
         output = {}
 
         future_egomotion = future_egomotion[:, :self.receptive_field].contiguous()
@@ -251,10 +279,24 @@ class streamingflow(nn.Module):
             image = image[:, :self.receptive_field].contiguous()
             intrinsics = intrinsics[:, :self.receptive_field].contiguous()
             extrinsics = extrinsics[:, :self.receptive_field].contiguous()
+            if self.use_event:
+                if event is None:
+                    raise ValueError("USE_EVENT is True but no event input was provided to forward().")
+                if torch.is_tensor(event):
+                    event_in = event[:, :self.receptive_field].contiguous()
+                elif isinstance(event, dict) and "frames" in event and torch.is_tensor(event["frames"]):
+                    event_in = dict(event)
+                    event_in["frames"] = event["frames"][:, :self.receptive_field].contiguous()
+                else:
+                    event_in = event
+            else:
+                event_in = None
            
 
             # Lifting features and project to bird's-eye view
-            x, depth, cam_front = self.calculate_birds_eye_view_features(image, intrinsics, extrinsics, future_egomotion) # (3,3,64,200,200)
+            x, depth, cam_front = self.calculate_birds_eye_view_features(
+                image, intrinsics, extrinsics, future_egomotion, event=event_in
+            ) # (3,3,64,200,200)
             output = {**output, 'depth_prediction': depth, 'cam_front':cam_front}
  
             if self.cfg.MODEL.TEMPORAL_MODEL.INPUT_EGOPOSE:
@@ -356,6 +398,60 @@ class streamingflow(nn.Module):
         depth = depth.view(b, n, *depth.shape[1:])
 
         return x, depth, cam_front
+
+    def event_encoder_forward(self, event_frames):
+        if not self.use_event:
+            raise RuntimeError("Event encoder requested but USE_EVENT is False.")
+        b, n, c, h, w = event_frames.shape
+        event_frames = event_frames.contiguous().view(b * n, c, h, w)
+        feats = self.event_encoder(event_frames)
+        feats = feats.view(b, n, *feats.shape[1:])
+        return feats
+
+    def _normalize_event_frame_shape(self, frames):
+        if frames.dim() == 5:
+            frames = frames.unsqueeze(0)
+        if frames.dim() != 6:
+            raise ValueError("事件帧需为[B, S, N, C, H, W]或[S, N, C, H, W]格式。")
+        return frames.contiguous()
+
+    def _prepare_event_frames(self, event_input, seq_len, device):
+        if torch.is_tensor(event_input):
+            frames = event_input.to(device=device, dtype=torch.float32)
+            frames = self._normalize_event_frame_shape(frames)
+        elif isinstance(event_input, dict) and "frames" in event_input and torch.is_tensor(event_input["frames"]):
+            frames = event_input["frames"].to(device=device, dtype=torch.float32)
+            frames = self._normalize_event_frame_shape(frames)
+        else:
+            if self.event_tensorizer is None:
+                self.event_tensorizer = EventTensorizer(self.cfg)
+            frames = self.event_tensorizer.prepare_frames(event_input, device=device, max_seq_len=seq_len)
+            frames = self._normalize_event_frame_shape(frames)
+
+        if frames.shape[1] < seq_len:
+            raise ValueError("事件帧长度不足，无法覆盖所需的时间步。")
+        if frames.shape[1] > seq_len:
+            frames = frames[:, :seq_len]
+        return frames
+
+    def fuse_camera_event_features(self, camera_feats, depth_logits, event_feats):
+        """
+        Args:
+            camera_feats: (B, S, N, D, H, W, C_cam)
+            depth_logits: (B, S, N, D, H, W)
+            event_feats: (B, S, N, C_evt, H, W)
+        """
+        depth_prob = depth_logits.softmax(dim=3)
+        event_feats = event_feats.permute(0, 1, 2, 4, 5, 3).unsqueeze(3)  # -> (B,S,N,1,H,W,C_evt)
+        event_feats = depth_prob.unsqueeze(-1) * event_feats  # broadcast over depth bins
+
+        if self.event_fusion_type == "concat":
+            fused = torch.cat([camera_feats, event_feats], dim=-1)
+            fused = self.event_fusion(fused)
+        else:  # residual
+            gate = self.event_gate.view(1, 1, 1, 1, 1, 1, -1)
+            fused = camera_feats + gate * event_feats
+        return fused
 
 
     # @force_fp32()
@@ -470,7 +566,7 @@ class streamingflow(nn.Module):
 
         return output
 
-    def calculate_birds_eye_view_features(self, x, intrinsics, extrinsics, future_egomotion):
+    def calculate_birds_eye_view_features(self, x, intrinsics, extrinsics, future_egomotion, event=None):
         b, s, n, c, h, w = x.shape
         # Reshape
         x = pack_sequence_dim(x)
@@ -480,9 +576,17 @@ class streamingflow(nn.Module):
         geometry = self.get_geometry(intrinsics, extrinsics)
 
         x, depth, cam_front = self.encoder_forward(x)
+        event_feats = None
+        if event is not None and self.use_event:
+            event_frames = self._prepare_event_frames(event, s, device=intrinsics.device)
+            event_frames_packed = pack_sequence_dim(event_frames)
+            event_feats = self.event_encoder_forward(event_frames_packed)
         x = unpack_sequence_dim(x, b, s)
         geometry = unpack_sequence_dim(geometry, b, s)
         depth = unpack_sequence_dim(depth, b, s)
+        if event_feats is not None:
+            event_feats = unpack_sequence_dim(event_feats, b, s)
+            x = self.fuse_camera_event_features(x, depth, event_feats)
         cam_front = unpack_sequence_dim(cam_front, b, s)[:,-1] if cam_front is not None else None
 
         x = self.projection_to_birds_eye_view(x, geometry, future_egomotion)

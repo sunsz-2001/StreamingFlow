@@ -137,8 +137,12 @@ class TrainingModule(pl.LightningModule):
         
 
         # Forward pass
+        event = batch['event'] if self.cfg.MODEL.MODALITY.USE_EVENT else None
+
         output = self.model(
             image, intrinsics, extrinsics, future_egomotion, padded_voxel_points,camera_timestamps, points,lidar_timestamps,target_timestamp,
+            image_hi=batch.get('image_hi'), intrinsics_hi=batch.get('intrinsics_hi'), extrinsics_hi=batch.get('extrinsics_hi'),
+            camera_timestamp_hi=batch.get('camera_timestamp_hi'), event=event
         )
 
         #####

@@ -126,10 +126,13 @@ def eval(checkpoint_path, continuous=False, dataroot=None,  n_future_frames=4, e
             batch['target_timestamp'] = target_timestamp
 
 
+        event = batch['event'] if cfg.MODEL.MODALITY.USE_EVENT else None
+
         t0 = time.time()
         with torch.no_grad():
             output = model(
                 image, intrinsics, extrinsics, future_egomotion ,padded_voxel_points,camera_timestamps, points, lidar_timestamps, target_timestamp,
+                event=event,
             )
         t1 = time.time()
 

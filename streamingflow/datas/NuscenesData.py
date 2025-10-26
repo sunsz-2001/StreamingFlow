@@ -347,6 +347,7 @@ class FuturePredictionDataset(torch.utils.data.Dataset):
         extrinsics = []
         depths = []
         cameras = self.cfg.IMAGE.NAMES
+        events = [] if self.cfg.MODEL.MODALITY.USE_EVENT else None
 
         # The extrinsics we want are from the camera sensor to "flat egopose" as defined
         # https://github.com/nutonomy/nuscenes-devkit/blob/9b492f76df22943daf1dc991358d3d606314af27/python-sdk/nuscenes/nuscenes.py#L279
@@ -432,6 +433,10 @@ class FuturePredictionDataset(torch.utils.data.Dataset):
                 depth = torch.round(depth)
                 depths.append(depth.unsqueeze(0).unsqueeze(0))
 
+            if events is not None:
+                event_tensor = self._load_event_tensor(camera_sample, orig_img_size)
+                events.append(event_tensor.unsqueeze(0).unsqueeze(0))
+
             images.append(normalised_img.unsqueeze(0).unsqueeze(0))
             intrinsics.append(intrinsic.unsqueeze(0).unsqueeze(0))
             extrinsics.append(sensor_to_lidar.unsqueeze(0).unsqueeze(0))
@@ -443,7 +448,62 @@ class FuturePredictionDataset(torch.utils.data.Dataset):
         if len(depths) > 0:
             depths = torch.cat(depths, dim=1)
 
-        return images, intrinsics, extrinsics, depths
+        if events is not None:
+            events = torch.cat(events, dim=1)
+
+        return images, intrinsics, extrinsics, depths, events
+
+    def _load_event_tensor(self, camera_sample, original_size):
+        events_root = getattr(self.cfg.DATASET, 'EVENTS_ROOT', '')
+        if events_root == '':
+            if getattr(self.cfg.DATASET, 'EVENTS_FALLBACK_ZERO', True):
+                channels = getattr(self.cfg.MODEL.EVENT, 'IN_CHANNELS', 0)
+                if channels <= 0:
+                    channels = 2 * getattr(self.cfg.MODEL.EVENT, 'BINS', 10)
+                h, w = self.cfg.IMAGE.FINAL_DIM
+                return torch.zeros(channels, h, w)
+            raise ValueError("USE_EVENT is True but DATASET.EVENTS_ROOT is not specified.")
+
+        rel_path = camera_sample['filename']
+        suffix = getattr(self.cfg.DATASET, 'EVENTS_FILE_SUFFIX', '.npz')
+        event_rel = os.path.splitext(rel_path)[0] + suffix
+        event_path = os.path.join(events_root, event_rel)
+
+        if not os.path.exists(event_path):
+            if getattr(self.cfg.DATASET, 'EVENTS_FALLBACK_ZERO', True):
+                channels = getattr(self.cfg.MODEL.EVENT, 'IN_CHANNELS', 0)
+                if channels <= 0:
+                    channels = 2 * getattr(self.cfg.MODEL.EVENT, 'BINS', 10)
+                h, w = self.cfg.IMAGE.FINAL_DIM
+                return torch.zeros(channels, h, w)
+            raise FileNotFoundError(f"Event frame not found at {event_path}")
+
+        data = np.load(event_path)
+        if 'frame' in data:
+            frame = data['frame']
+        else:
+            frame = data[data.files[0]]
+
+        if frame.ndim == 4 and frame.shape[0] == 2:
+            frame = frame.reshape(-1, frame.shape[-2], frame.shape[-1])
+        elif frame.ndim == 3:
+            pass
+        else:
+            raise ValueError(f"Unexpected event frame shape {frame.shape} in {event_path}")
+
+        frame = torch.from_numpy(frame.astype(np.float32))
+        norm = float(getattr(self.cfg.DATASET, 'EVENTS_NORMALIZATION', 255.0))
+        if norm > 0:
+            frame = frame / norm
+
+        frame = frame.unsqueeze(0)
+        resize_dims = self.augmentation_parameters['resize_dims']
+        frame = F.interpolate(frame, size=(resize_dims[1], resize_dims[0]), mode='bilinear', align_corners=False)
+        crop = self.augmentation_parameters['crop']
+        frame = frame[:, :, crop[1]:crop[3], crop[0]:crop[2]]
+        frame = frame.squeeze(0)
+
+        return frame
 
     def _get_top_lidar_pose(self, rec):
         egopose = self.nusc.get('ego_pose', self.nusc.get('sample_data', rec['data']['LIDAR_TOP'])['ego_pose_token'])
@@ -907,6 +967,8 @@ class FuturePredictionDataset(torch.utils.data.Dataset):
                 'segmentation', 'instance', 'centerness', 'offset', 'flow', 'pedestrian',
                 'future_egomotion', 'hdmap', 'gt_trajectory', 'indices' , 'camera_timestamp', 'target_timestamp', 'lidar_timestamp', 'points'
                 ]
+        if self.cfg.MODEL.MODALITY.USE_EVENT:
+            keys.append('event')
         for key in keys:
             data[key] = []
         # if self.cfg.MODEL.MODALITY.USE_RADAR:
@@ -947,11 +1009,13 @@ class FuturePredictionDataset(torch.utils.data.Dataset):
 
             if i < self.receptive_field:
 
-                images, intrinsics, extrinsics, depths = self.get_input_data(rec)
+                images, intrinsics, extrinsics, depths, events = self.get_input_data(rec)
                 data['image'].append(images)
                 data['intrinsics'].append(intrinsics)
                 data['extrinsics'].append(extrinsics)
                 data['depths'].append(depths)
+                if self.cfg.MODEL.MODALITY.USE_EVENT:
+                    data['event'].append(events)
                 data['camera_timestamp'].append(rec['timestamp'])
 
             
@@ -1018,7 +1082,7 @@ class FuturePredictionDataset(torch.utils.data.Dataset):
             data['points'].append(point)
 
         for key, value in data.items():
-            if key in ['image', 'intrinsics', 'extrinsics', 'depths', 'segmentation', 'instance', 'future_egomotion', 'pedestrian']:
+            if key in ['image', 'intrinsics', 'extrinsics', 'depths', 'segmentation', 'instance', 'future_egomotion', 'pedestrian', 'event']:
                 if key == 'depths' and self.cfg.LIFT.GT_DEPTH is False:
                     continue
                 data[key] = torch.cat(value, dim=0)

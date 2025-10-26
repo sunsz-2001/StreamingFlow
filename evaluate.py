@@ -164,10 +164,13 @@ def eval(checkpoint_path, continuous=False, dataroot=None,  n_future_frames=4, d
             # Convert timestamps to torch tensor on device (seconds)
             camera_timestamps_hi = torch.as_tensor(batch['camera_timestamp_hi'], dtype=image.dtype, device=image.device)
 
+        event = batch['event'] if cfg.MODEL.MODALITY.USE_EVENT else None
+
         with torch.no_grad():
             output = model(
                 image, intrinsics, extrinsics, future_egomotion ,padded_voxel_points,camera_timestamps, points, lidar_timestamps, target_timestamp,
                 image_hi=image_hi, intrinsics_hi=intrinsics_hi, extrinsics_hi=extrinsics_hi, camera_timestamp_hi=camera_timestamps_hi,
+                event=event,
             )
         t1 = time.time()
 
