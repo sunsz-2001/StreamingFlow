@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -76,14 +76,28 @@ class EventEncoderEvRT(nn.Module):
         if fusion_mode not in {"sum", "concat"}:
             raise ValueError(f"Unsupported MULTISCALE_FUSION={fusion_mode}")
         self.multiscale_fusion = fusion_mode
+        use_depth_head = getattr(cfg, "USE_DEPTH_HEAD", True)
+        if use_depth_head:
+            depth_bins = int(getattr(cfg, "DEPTH_BINS", 80))
+            depth_hidden = int(getattr(cfg, "DEPTH_HEAD_CHANNELS", 128))
+            skip_channels = hybrid_hidden if len(in_channels_list) > 1 else 0
+            self.depth_head = EventDepthHead(
+                in_channels=hybrid_hidden,
+                skip_channels=skip_channels,
+                hidden_channels=depth_hidden,
+                depth_bins=depth_bins,
+            )
+        else:
+            self.depth_head = None
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         """
         Args:
             x: Tensor of shape (B, C_evt, H, W)
 
         Returns:
-            Tensor of shape (B, out_channels, H/8, W/8)
+            features: Tensor of shape (B, out_channels, H/8, W/8)
+            depth_logits: Tensor of shape (B, depth_bins, H/8, W/8) or None
         """
         feats: List[torch.Tensor] = self.backbone(x)
         encoded: List[torch.Tensor] = self.hybrid_encoder(feats)
@@ -104,4 +118,52 @@ class EventEncoderEvRT(nn.Module):
             fused = p3
 
         out = self.output_proj(fused)
-        return out
+        depth_logits: Optional[torch.Tensor] = None
+        if self.depth_head is not None:
+            skip_feat = encoded[1] if len(encoded) > 1 else None
+            depth_logits = self.depth_head(p3, skip_feat)
+        return out, depth_logits
+
+
+class EventDepthHead(nn.Module):
+    """Predict per-pixel depth logits from stride-8 event features."""
+
+    def __init__(
+        self,
+        in_channels: int,
+        skip_channels: int,
+        hidden_channels: int,
+        depth_bins: int,
+    ) -> None:
+        super().__init__()
+        if depth_bins <= 1:
+            raise ValueError("depth_bins must be > 1 for depth distribution.")
+        self.skip_proj: Optional[nn.Module] = None
+        if skip_channels > 0:
+            self.skip_proj = nn.Sequential(
+                nn.Conv2d(skip_channels, hidden_channels, kernel_size=1, bias=False),
+                nn.BatchNorm2d(hidden_channels),
+            )
+
+        self.input_block = nn.Sequential(
+            nn.Conv2d(in_channels, hidden_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(hidden_channels),
+            nn.ReLU(inplace=True),
+        )
+        self.refine_block = nn.Sequential(
+            nn.Conv2d(hidden_channels, hidden_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(hidden_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(hidden_channels, hidden_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(hidden_channels),
+            nn.ReLU(inplace=True),
+        )
+        self.output_proj = nn.Conv2d(hidden_channels, depth_bins, kernel_size=1)
+
+    def forward(self, main: torch.Tensor, skip: Optional[torch.Tensor] = None) -> torch.Tensor:
+        x = self.input_block(main)
+        if skip is not None and self.skip_proj is not None:
+            skip_resized = F.interpolate(skip, size=main.shape[-2:], mode="bilinear", align_corners=False)
+            x = x + self.skip_proj(skip_resized)
+        x = self.refine_block(x)
+        return self.output_proj(x)

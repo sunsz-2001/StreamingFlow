@@ -47,6 +47,9 @@ def build_test_cfg():
     cfg.MODEL.EVENT.FREEZE_BACKBONE = False
     cfg.MODEL.EVENT.PRETRAINED = False
     cfg.MODEL.EVENT.NORMALIZE = False
+    cfg.MODEL.EVENT.USE_DEPTH_HEAD = True
+    cfg.MODEL.EVENT.DEPTH_BINS = int((cfg.LIFT.D_BOUND[1] - cfg.LIFT.D_BOUND[0]) / cfg.LIFT.D_BOUND[2])
+    cfg.MODEL.EVENT.DEPTH_HEAD_CHANNELS = 64
 
     cfg.MODEL.TEMPORAL_MODEL.NAME = "identity"
     cfg.MODEL.TEMPORAL_MODEL.INPUT_EGOPOSE = False
@@ -138,7 +141,7 @@ def main():
 
     with torch.no_grad():
         # 先测试直接调用内部函数（避免额外 copy）
-        bev_feat, depth, cam_front = model.calculate_birds_eye_view_features(
+        bev_feat, depth, cam_front, event_depth = model.calculate_birds_eye_view_features(
             batch["image"],
             batch["intrinsics"],
             batch["extrinsics"],
@@ -149,6 +152,8 @@ def main():
     print(f"[Step] BEV tensor shape: {bev_feat.shape}")
     if depth is not None:
         print(f"[Step] Depth logits shape: {depth.shape}")
+    if event_depth is not None:
+        print(f"[Step] Event depth logits shape: {event_depth.shape}")
     print(f"[Step] Cam front feature: {None if cam_front is None else cam_front.shape}")
 
     target_timestamp = torch.zeros(batch["image"].size(0), cfg.TIME_RECEPTIVE_FIELD, device=device)
@@ -169,6 +174,8 @@ def main():
         elif isinstance(value, dict):
             for sub_key, sub_value in value.items():
                 print(f"[Output] {key}.{sub_key}: {tuple(sub_value.shape)}")
+    if "event_depth_prediction" in outputs and torch.is_tensor(outputs["event_depth_prediction"]):
+        print(f"[Output] event_depth_prediction: {tuple(outputs['event_depth_prediction'].shape)}")
 
     print("\n事件分支自检完成，可在日志中核对各阶段形状。")
 

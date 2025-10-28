@@ -294,10 +294,13 @@ class streamingflow(nn.Module):
            
 
             # Lifting features and project to bird's-eye view
-            x, depth, cam_front = self.calculate_birds_eye_view_features(
+            x, depth, cam_front, event_depth = self.calculate_birds_eye_view_features(
                 image, intrinsics, extrinsics, future_egomotion, event=event_in
             ) # (3,3,64,200,200)
-            output = {**output, 'depth_prediction': depth, 'cam_front':cam_front}
+            if event_depth is not None:
+                output = {**output, 'depth_prediction': depth, 'event_depth_prediction': event_depth, 'cam_front':cam_front}
+            else:
+                output = {**output, 'depth_prediction': depth, 'cam_front':cam_front}
  
             if self.cfg.MODEL.TEMPORAL_MODEL.INPUT_EGOPOSE:
                 b, s, c = future_egomotion.shape
@@ -326,7 +329,7 @@ class streamingflow(nn.Module):
 
             b, S_cam = image_hi_b.shape[0], image_hi_b.shape[1]
             zeros_ego = torch.zeros((b, S_cam, 6), device=image_hi_b.device, dtype=image_hi_b.dtype)
-            x_hi, _, _ = self.calculate_birds_eye_view_features(
+            x_hi, _, _, _ = self.calculate_birds_eye_view_features(
                 image_hi_b, intrinsics_hi_b, extrinsics_hi_b, zeros_ego
             )
             camera_states_hi = x_hi.contiguous()  # [B, S_cam, C, H, W]
@@ -404,9 +407,20 @@ class streamingflow(nn.Module):
             raise RuntimeError("Event encoder requested but USE_EVENT is False.")
         b, n, c, h, w = event_frames.shape
         event_frames = event_frames.contiguous().view(b * n, c, h, w)
-        feats = self.event_encoder(event_frames)
+        feats, depth_logits = self.event_encoder(event_frames)
         feats = feats.view(b, n, *feats.shape[1:])
-        return feats
+        if depth_logits is not None:
+            depth_logits = depth_logits.view(b, n, *depth_logits.shape[1:])
+        return feats, depth_logits
+
+    def _resize_event_depth_bins(self, depth_logits, target_bins):
+        if depth_logits.shape[3] == target_bins:
+            return depth_logits
+        b, s, n, d, h, w = depth_logits.shape
+        reshaped = depth_logits.contiguous().view(b * s * n, 1, d, h, w)
+        resized = F.interpolate(reshaped, size=(target_bins, h, w), mode="trilinear", align_corners=False)
+        resized = resized.view(b, s, n, target_bins, h, w)
+        return resized
 
     def _normalize_event_frame_shape(self, frames):
         if frames.dim() == 5:
@@ -577,20 +591,26 @@ class streamingflow(nn.Module):
 
         x, depth, cam_front = self.encoder_forward(x)
         event_feats = None
+        event_depth_logits = None
         if event is not None and self.use_event:
             event_frames = self._prepare_event_frames(event, s, device=intrinsics.device)
             event_frames_packed = pack_sequence_dim(event_frames)
-            event_feats = self.event_encoder_forward(event_frames_packed)
+            event_feats, event_depth_logits = self.event_encoder_forward(event_frames_packed)
         x = unpack_sequence_dim(x, b, s)
         geometry = unpack_sequence_dim(geometry, b, s)
         depth = unpack_sequence_dim(depth, b, s)
         if event_feats is not None:
             event_feats = unpack_sequence_dim(event_feats, b, s)
-            x = self.fuse_camera_event_features(x, depth, event_feats)
+        if event_depth_logits is not None:
+            event_depth_logits = unpack_sequence_dim(event_depth_logits, b, s)
+            event_depth_logits = self._resize_event_depth_bins(event_depth_logits, depth.shape[3])
+        if event_feats is not None:
+            depth_for_fusion = event_depth_logits if event_depth_logits is not None else depth
+            x = self.fuse_camera_event_features(x, depth_for_fusion, event_feats)
         cam_front = unpack_sequence_dim(cam_front, b, s)[:,-1] if cam_front is not None else None
 
         x = self.projection_to_birds_eye_view(x, geometry, future_egomotion)
-        return x, depth, cam_front
+        return x, depth, cam_front, event_depth_logits
 
     def distribution_forward(self, present_features, min_log_sigma, max_log_sigma):
         """
