@@ -23,14 +23,14 @@ from streamingflow.models.streamingflow import streamingflow  # noqa: E402
 from streamingflow.utils.event_tensor import EventTensorizer  # noqa: E402
 
 
-def build_test_cfg():
+def build_test_cfg(use_camera=True):
     cfg = get_cfg()
 
     # 简化尺寸，保持编码器兼容
     cfg.TIME_RECEPTIVE_FIELD = 2
     cfg.N_FUTURE_FRAMES = 0
 
-    cfg.MODEL.MODALITY.USE_CAMERA = True
+    cfg.MODEL.MODALITY.USE_CAMERA = use_camera
     cfg.MODEL.MODALITY.USE_EVENT = True
     cfg.MODEL.MODALITY.USE_LIDAR = False
     cfg.MODEL.MODALITY.USE_RADAR = False
@@ -39,6 +39,9 @@ def build_test_cfg():
     cfg.MODEL.ENCODER.USE_DEPTH_DISTRIBUTION = True
     cfg.MODEL.ENCODER.OUT_CHANNELS = 64
     cfg.MODEL.ENCODER.DOWNSAMPLE = 8
+
+    if not use_camera:
+        cfg.MODEL.ENCODER.USE_DEPTH_DISTRIBUTION = False
 
     cfg.MODEL.EVENT.BINS = 4
     cfg.MODEL.EVENT.IN_CHANNELS = 0  # 自动使用 2 * bins
@@ -123,68 +126,69 @@ def make_mock_batch(cfg, device):
 
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    cfg = build_test_cfg()
 
-    # 只保留前 N 个相机名称以匹配假数据
-    cfg.IMAGE.NAMES = cfg.IMAGE.NAMES[:3]
+    for use_camera in (True, False):
+        print(f"\n===== 测试配置：USE_CAMERA={use_camera}, USE_EVENT=True =====")
+        cfg = build_test_cfg(use_camera=use_camera)
+        cfg.IMAGE.NAMES = cfg.IMAGE.NAMES[:3]
 
-    batch = make_mock_batch(cfg, device)
+        batch = make_mock_batch(cfg, device)
+        if not use_camera:
+            batch["image"] = torch.zeros_like(batch["image"])
 
-    try:
-        model = streamingflow(cfg).to(device)
-    except ImportError as exc:
-        raise SystemExit(
-            "\n[Error] 导入 EvRT-DETR 失败，请先 `pip install -e ./evrt-detr`。\n"
-            f"原始异常：{exc}"
-        )
+        try:
+            model = streamingflow(cfg).to(device)
+        except ImportError as exc:
+            raise SystemExit(
+                "\n[Error] 导入 EvRT-DETR 失败，请先 `pip install -e ./evrt-detr`。\n"
+                f"原始异常：{exc}"
+            )
 
-    model.eval()
+        model.eval()
 
-    with torch.no_grad():
-        # 先测试直接调用内部函数（避免额外 copy）
-        modality_outputs = model.calculate_birds_eye_view_features(
-            batch["intrinsics"],
-            batch["extrinsics"],
-            batch["future_egomotion"],
-            image=batch["image"],
-            event=batch["event_nested"],
-        )
+        with torch.no_grad():
+            modality_outputs = model.calculate_birds_eye_view_features(
+                batch["intrinsics"],
+                batch["extrinsics"],
+                batch["future_egomotion"],
+                image=batch["image"] if use_camera else None,
+                event=batch["event_nested"],
+            )
+
         camera_data = modality_outputs.get("camera")
         event_data = modality_outputs.get("event")
-        bev_feat = camera_data["bev"] if camera_data is not None else None
-        depth = camera_data["depth"] if camera_data is not None else None
-        cam_front = camera_data["cam_front"] if camera_data is not None else None
-        event_depth = event_data["depth"] if event_data is not None else None
+        if camera_data is not None:
+            print(f"[Step] Camera BEV shape: {camera_data['bev'].shape}")
+            print(f"[Step] Depth logits shape: {camera_data['depth'].shape}")
+        else:
+            print("[Step] Camera branch disabled")
 
-    print(f"[Step] BEV tensor shape: {bev_feat.shape}")
-    if depth is not None:
-        print(f"[Step] Depth logits shape: {depth.shape}")
-    if event_depth is not None:
-        print(f"[Step] Event depth logits shape: {event_depth.shape}")
-    print(f"[Step] Cam front feature: {None if cam_front is None else cam_front.shape}")
+        if event_data is not None:
+            print(f"[Step] Event BEV shape: {event_data['bev'].shape}")
+            print(f"[Step] Event depth logits shape: {event_data['depth'].shape}")
+        else:
+            print("[Step] Event branch disabled")
 
-    target_timestamp = torch.zeros(batch["image"].size(0), cfg.TIME_RECEPTIVE_FIELD, device=device)
+        target_timestamp = torch.zeros(batch["image"].size(0), cfg.TIME_RECEPTIVE_FIELD, device=device)
 
-    with torch.no_grad():
-        outputs = model(
-            batch["image"],
-            batch["intrinsics"],
-            batch["extrinsics"],
-            batch["future_egomotion"],
-            target_timestamp=target_timestamp,
-            event=batch["event_nested"],
-        )
+        with torch.no_grad():
+            outputs = model(
+                batch["image"],
+                batch["intrinsics"],
+                batch["extrinsics"],
+                batch["future_egomotion"],
+                target_timestamp=target_timestamp,
+                event=batch["event_nested"],
+            )
 
-    for key, value in outputs.items():
-        if torch.is_tensor(value):
-            print(f"[Output] {key}: {tuple(value.shape)}")
-        elif isinstance(value, dict):
-            for sub_key, sub_value in value.items():
-                print(f"[Output] {key}.{sub_key}: {tuple(sub_value.shape)}")
-    if "event_depth_prediction" in outputs and torch.is_tensor(outputs["event_depth_prediction"]):
-        print(f"[Output] event_depth_prediction: {tuple(outputs['event_depth_prediction'].shape)}")
+        for key, value in outputs.items():
+            if torch.is_tensor(value):
+                print(f"[Output] {key}: {tuple(value.shape)}")
+            elif isinstance(value, dict):
+                for sub_key, sub_value in value.items():
+                    print(f"[Output] {key}.{sub_key}: {tuple(sub_value.shape)}")
 
-    print("\n事件分支自检完成，可在日志中核对各阶段形状。")
+        print("\n事件分支自检完成，可在日志中核对各阶段形状。")
 
 
 if __name__ == "__main__":
