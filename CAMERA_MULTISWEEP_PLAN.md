@@ -130,11 +130,13 @@ if self.use_camera and image_hi is not None:
     # 逐帧 lifting，egomotion 置零（单帧特征）
     # image_hi: [S_cam, N, 3, H, W] → 增 batch 维： [1, S_cam, N, ...]
     b = 1
-    x_hi, depth_hi, _ = self.calculate_birds_eye_view_features(
-        image_hi.unsqueeze(0), intrinsics_hi.unsqueeze(0), extrinsics_hi.unsqueeze(0),
-        future_egomotion=torch.zeros((b, image_hi.shape[0], 6), device=image_hi.device, dtype=image_hi.dtype)
-    )  # 返回形如 [1, S_cam, C, H_bev, W_bev]
-    hi_states = x_hi.squeeze(0)  # [S_cam, C, H, W]
+    hi_outputs = self.calculate_birds_eye_view_features(
+        intrinsics_hi.unsqueeze(0),
+        extrinsics_hi.unsqueeze(0),
+        future_egomotion=torch.zeros((b, image_hi.shape[0], 6), device=image_hi.device, dtype=image_hi.dtype),
+        image=image_hi.unsqueeze(0),
+    )
+    hi_states = hi_outputs["camera"]["bev"].squeeze(0)  # [S_cam, C, H, W]
 ```
 
 3) 将高频相机观测传给 ODE（与原 camera_states/lidar_states 一起）
@@ -249,4 +251,3 @@ if camera_states_hi is not None:
 ---
 
 如需，我可以基于此清单提交一版最小实现（仅评测路径）。默认行为不变，开关关闭时零影响。
-

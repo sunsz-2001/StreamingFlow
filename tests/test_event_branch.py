@@ -42,7 +42,8 @@ def build_test_cfg():
 
     cfg.MODEL.EVENT.BINS = 4
     cfg.MODEL.EVENT.IN_CHANNELS = 0  # 自动使用 2 * bins
-    cfg.MODEL.EVENT.FUSION_TYPE = "concat"
+    cfg.MODEL.EVENT.FUSION_TYPE = "independent"
+    cfg.MODEL.EVENT.BEV_FUSION = "sum"
     cfg.MODEL.EVENT.MULTISCALE_FUSION = "sum"
     cfg.MODEL.EVENT.FREEZE_BACKBONE = False
     cfg.MODEL.EVENT.PRETRAINED = False
@@ -141,13 +142,19 @@ def main():
 
     with torch.no_grad():
         # 先测试直接调用内部函数（避免额外 copy）
-        bev_feat, depth, cam_front, event_depth = model.calculate_birds_eye_view_features(
-            batch["image"],
+        modality_outputs = model.calculate_birds_eye_view_features(
             batch["intrinsics"],
             batch["extrinsics"],
             batch["future_egomotion"],
+            image=batch["image"],
             event=batch["event_nested"],
         )
+        camera_data = modality_outputs.get("camera")
+        event_data = modality_outputs.get("event")
+        bev_feat = camera_data["bev"] if camera_data is not None else None
+        depth = camera_data["depth"] if camera_data is not None else None
+        cam_front = camera_data["cam_front"] if camera_data is not None else None
+        event_depth = event_data["depth"] if event_data is not None else None
 
     print(f"[Step] BEV tensor shape: {bev_feat.shape}")
     if depth is not None:

@@ -12,12 +12,14 @@
 
 2. **StreamingFlow 主干调整**  
    - `streamingflow/models/streamingflow.py` 通过 `event_encoder_forward` 同时获得事件特征与深度，自动插值到 LSS 需要的深度 bin。  
-   - 融合阶段若事件深度可用，则优先使用事件深度分布对事件特征做体素化，与相机分支共享 lift-splat 管线。  
+   - 事件分支具备完整的 lifting→BEV→Temporal 流水线，可在 `USE_CAMERA=False` 时独立运行。  
+   - 当相机与事件同时启用时，默认以 `MODEL.EVENT.BEV_FUSION`（`sum`/`avg`）在 BEV 空间融合两路特征，也可将 `FUSION_TYPE` 设为 `concat`/`residual` 继续沿用旧的前融合路径。  
    - 前向输出新增 `event_depth_prediction`，便于训练或异步更新时复用。
 
 3. **配置项**  
    - `MODEL.EVENT.USE_DEPTH_HEAD`（默认启用）控制是否构建深度头。  
-   - `MODEL.EVENT.DEPTH_BINS` 与 `MODEL.EVENT.DEPTH_HEAD_CHANNELS` 支持独立调节事件深度分辨率与头部宽度。
+   - `MODEL.EVENT.DEPTH_BINS` 与 `MODEL.EVENT.DEPTH_HEAD_CHANNELS` 支持独立调节事件深度分辨率与头部宽度。  
+   - `MODEL.EVENT.FUSION_TYPE` 默认 `independent` 表示事件分支独立输出；`MODEL.EVENT.BEV_FUSION` 控制与相机 BEV 的融合方式。
 
 ---
 
