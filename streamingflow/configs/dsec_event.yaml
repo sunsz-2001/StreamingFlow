@@ -1,0 +1,86 @@
+TAG: 'dsec_event_eval'
+
+GPUS: [0]
+BATCHSIZE: 1
+PRECISION: 32
+EPOCHS: 1
+
+N_WORKERS: 4
+
+DATASET:
+  NAME: 'dsec'
+  DATAROOT: '/abs/path/to/dsec_root'
+  EVENTS_ROOT: '/abs/path/to/dsec_events'  # 若事件帧已与图像同目录，可保留为空
+  EVENTS_FILE_SUFFIX: '.npz'
+  EVENTS_NORMALIZATION: 255.0
+  EVENTS_FALLBACK_ZERO: True
+  EVENT_CAMERAS: ['camera_0']
+  VERSION: 'trainval'
+
+TIME_RECEPTIVE_FIELD: 2
+N_FUTURE_FRAMES: 0
+
+IMAGE:
+  FINAL_DIM: [256, 512]
+  RESIZE_SCALE: 1.0
+  TOP_CROP: 0
+  ORIGINAL_HEIGHT: 256
+  ORIGINAL_WIDTH: 512
+  NAMES: ['camera_0']
+
+LIFT:
+  GT_DEPTH: False
+  GEN_DEPTH: False
+  D_BOUND: [2.0, 50.0, 1.0]
+
+MODEL:
+  MODALITY:
+    USE_CAMERA: False
+    USE_EVENT: True
+    USE_LIDAR: False
+    USE_RADAR: False
+  ENCODER:
+    NAME: 'efficientnet-b0'
+    OUT_CHANNELS: 64
+    DOWNSAMPLE: 8
+    USE_DEPTH_DISTRIBUTION: False
+  EVENT:
+    BACKBONE: 'presnet50'
+    BINS: 10
+    IN_CHANNELS: 0  # 自动使用 2 * BINS
+    HIDDEN_DIM: 256
+    NUM_ENCODER_LAYERS: 1
+    NUM_HEADS: 8
+    PRETRAINED: False
+    FREEZE_BACKBONE: False
+    MULTISCALE_FUSION: 'sum'
+    FUSION_TYPE: 'independent'
+    BEV_FUSION: 'sum'
+    USE_DEPTH_HEAD: True
+    DEPTH_BINS: 80
+    DEPTH_HEAD_CHANNELS: 128
+    RESIDUAL_INIT: 0.0
+  TEMPORAL_MODEL:
+    NAME: 'identity'
+    INPUT_EGOPOSE: False
+
+SEMANTIC_SEG:
+  PEDESTRIAN:
+    ENABLED: False
+  HDMAP:
+    ENABLED: False
+
+INSTANCE_SEG:
+  ENABLED: False
+
+INSTANCE_FLOW:
+  ENABLED: False
+
+PLANNING:
+  ENABLED: False
+
+OPTIMIZER:
+  LR: 2e-4
+
+PRETRAINED:
+  LOAD_WEIGHTS: False
