@@ -65,6 +65,7 @@ _C.DATASET.EVENTS_ROOT = ''
 _C.DATASET.EVENTS_FILE_SUFFIX = '.npz'
 _C.DATASET.EVENTS_NORMALIZATION = 255.0
 _C.DATASET.EVENTS_FALLBACK_ZERO = True
+_C.DATASET.EVENT_CAMERAS = []
 
 
 _C.TIME_RECEPTIVE_FIELD = 3  # how many frames of temporal context (1 for single timeframe)

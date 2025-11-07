@@ -4,6 +4,7 @@ from nuscenes.nuscenes import NuScenes
 from streamingflow.datas.NuscenesData import FuturePredictionDataset
 from lyft_dataset_sdk.lyftdataset import LyftDataset
 from streamingflow.datas.LyftData import FuturePredictionDatasetLyft
+from streamingflow.datas.DSECData import DatasetDSEC
 
 import os
 
@@ -63,8 +64,16 @@ def prepare_dataloaders(cfg, return_dataset=False):
         )
         valloader = torch.utils.data.DataLoader(
             valdata, batch_size=cfg.BATCHSIZE, shuffle=False, num_workers=nworkers, pin_memory=True, drop_last=False)
+    elif cfg.DATASET.NAME == 'dsec':
+        traindata = DatasetDSEC(cfg, cfg, is_train=True)
+        valdata = DatasetDSEC(cfg, cfg, is_train=False)
 
-
+        nworkers = cfg.N_WORKERS
+        trainloader = torch.utils.data.DataLoader(
+            traindata, batch_size=cfg.BATCHSIZE, shuffle=True, num_workers=nworkers, pin_memory=True, drop_last=True
+        )
+        valloader = torch.utils.data.DataLoader(
+            valdata, batch_size=cfg.BATCHSIZE, shuffle=False, num_workers=nworkers, pin_memory=True, drop_last=False)
 
     else:
         raise NotImplementedError

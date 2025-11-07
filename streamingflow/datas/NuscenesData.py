@@ -347,7 +347,7 @@ class FuturePredictionDataset(torch.utils.data.Dataset):
         extrinsics = []
         depths = []
         cameras = self.cfg.IMAGE.NAMES
-        events = [] if self.cfg.MODEL.MODALITY.USE_EVENT else None
+        events = None
 
         # The extrinsics we want are from the camera sensor to "flat egopose" as defined
         # https://github.com/nutonomy/nuscenes-devkit/blob/9b492f76df22943daf1dc991358d3d606314af27/python-sdk/nuscenes/nuscenes.py#L279
@@ -433,10 +433,6 @@ class FuturePredictionDataset(torch.utils.data.Dataset):
                 depth = torch.round(depth)
                 depths.append(depth.unsqueeze(0).unsqueeze(0))
 
-            if events is not None:
-                event_tensor = self._load_event_tensor(camera_sample, orig_img_size)
-                events.append(event_tensor.unsqueeze(0).unsqueeze(0))
-
             images.append(normalised_img.unsqueeze(0).unsqueeze(0))
             intrinsics.append(intrinsic.unsqueeze(0).unsqueeze(0))
             extrinsics.append(sensor_to_lidar.unsqueeze(0).unsqueeze(0))
@@ -448,12 +444,52 @@ class FuturePredictionDataset(torch.utils.data.Dataset):
         if len(depths) > 0:
             depths = torch.cat(depths, dim=1)
 
-        if events is not None:
-            events = torch.cat(events, dim=1)
+        if self.cfg.MODEL.MODALITY.USE_EVENT:
+            # Load event observations independently of the RGB pipeline.
+            events = self.get_event_data(rec)
 
         return images, intrinsics, extrinsics, depths, events
 
-    def _load_event_tensor(self, camera_sample, original_size):
+    def get_event_data(self, rec):
+        """Load event observations for the given sample record."""
+        if not self.cfg.MODEL.MODALITY.USE_EVENT:
+            return None
+
+        event_cameras = getattr(self.cfg.DATASET, 'EVENT_CAMERAS', None)
+        if not event_cameras:
+            event_cameras = self.cfg.IMAGE.NAMES
+
+        event_tensors = []
+        for cam in event_cameras:
+            if cam not in rec['data']:
+                raise KeyError(f"Camera '{cam}' not found in sample data; cannot load event tensor.")
+            camera_sample = self.nusc.get('sample_data', rec['data'][cam])
+            event_tensor = self._load_event_tensor(camera_sample)
+            event_tensors.append(event_tensor.unsqueeze(0).unsqueeze(0))
+
+        if len(event_tensors) == 0:
+            raise RuntimeError("No event tensors were loaded for the current sample.")
+
+        # Concatenate along the camera dimension to match downstream expectations: [1, N_evt, C, H, W]
+        return torch.cat(event_tensors, dim=1)
+
+    def _load_event_tensor(self, camera_sample):
+        """加载与某个相机样本对齐的事件帧，并做与图像一致的预处理。
+
+        Args:
+            camera_sample (dict): nuScenes 的相机 `sample_data` 记录。
+
+        Returns:
+            torch.Tensor: 形状为 [C, H, W] 的事件张量，已完成：
+                - 路径映射（由相机文件名映射到事件文件名）
+                - npz 读取与通道维度归一化
+                - 归一化（按 `DATASET.EVENTS_NORMALIZATION`）
+                - resize 与裁剪（与图像保持一致）
+
+        说明：当找不到事件文件且允许回退时，返回全零张量，通道数来源于配置；否则抛出异常。
+        """
+
+        # 事件根目录：若未配置且允许回退，则返回全零事件张量；否则报错。
         events_root = getattr(self.cfg.DATASET, 'EVENTS_ROOT', '')
         if events_root == '':
             if getattr(self.cfg.DATASET, 'EVENTS_FALLBACK_ZERO', True):
@@ -464,6 +500,7 @@ class FuturePredictionDataset(torch.utils.data.Dataset):
                 return torch.zeros(channels, h, w)
             raise ValueError("USE_EVENT is True but DATASET.EVENTS_ROOT is not specified.")
 
+        # 路径映射：复用图像的相对路径，替换后缀得到事件文件路径。
         rel_path = camera_sample['filename']
         suffix = getattr(self.cfg.DATASET, 'EVENTS_FILE_SUFFIX', '.npz')
         event_rel = os.path.splitext(rel_path)[0] + suffix
@@ -478,12 +515,16 @@ class FuturePredictionDataset(torch.utils.data.Dataset):
                 return torch.zeros(channels, h, w)
             raise FileNotFoundError(f"Event frame not found at {event_path}")
 
+        # 读取 npz：优先使用 `frame` 键；否则取第一个数组。
         data = np.load(event_path)
         if 'frame' in data:
             frame = data['frame']
         else:
             frame = data[data.files[0]]
 
+        # 维度规范：
+        # - 常见格式为 [2, T, H, W]（正负极性两路），这里将其摊平为 [C, H, W]
+        # - 若已为 [C, H, W] 则直接使用
         if frame.ndim == 4 and frame.shape[0] == 2:
             frame = frame.reshape(-1, frame.shape[-2], frame.shape[-1])
         elif frame.ndim == 3:
@@ -491,17 +532,19 @@ class FuturePredictionDataset(torch.utils.data.Dataset):
         else:
             raise ValueError(f"Unexpected event frame shape {frame.shape} in {event_path}")
 
+        # 转 tensor 并按配置做强度归一化
         frame = torch.from_numpy(frame.astype(np.float32))
         norm = float(getattr(self.cfg.DATASET, 'EVENTS_NORMALIZATION', 255.0))
         if norm > 0:
             frame = frame / norm
 
-        frame = frame.unsqueeze(0)
+        # 与图像相同的几何增强：先 resize 再 crop，保持与视觉模态对齐
+        frame = frame.unsqueeze(0)  # [1, C, H, W]
         resize_dims = self.augmentation_parameters['resize_dims']
         frame = F.interpolate(frame, size=(resize_dims[1], resize_dims[0]), mode='bilinear', align_corners=False)
         crop = self.augmentation_parameters['crop']
         frame = frame[:, :, crop[1]:crop[3], crop[0]:crop[2]]
-        frame = frame.squeeze(0)
+        frame = frame.squeeze(0)  # [C, H, W]
 
         return frame
 
@@ -1015,6 +1058,7 @@ class FuturePredictionDataset(torch.utils.data.Dataset):
                 data['extrinsics'].append(extrinsics)
                 data['depths'].append(depths)
                 if self.cfg.MODEL.MODALITY.USE_EVENT:
+                    # Keep the event tensor for each history step so the model receives the full temporal window
                     data['event'].append(events)
                 data['camera_timestamp'].append(rec['timestamp'])
 
