@@ -57,7 +57,17 @@ def move_to_device(value, device):
     return value
 
 
-def prepare_model_inputs(batch, device):
+def infer_batch_size(tensors):
+    for key in [
+        'image', 'event', 'intrinsics', 'future_egomotion', 'points', 'padded_voxel_points'
+    ]:
+        value = tensors.get(key)
+        if torch.is_tensor(value):
+            return value.shape[0]
+    return 1
+
+
+def prepare_model_inputs(batch, device, cfg):
     keys = [
         "image",
         "intrinsics",
@@ -72,11 +82,15 @@ def prepare_model_inputs(batch, device):
     ]
     prepared = {k: move_to_device(batch.get(k), device) for k in keys}
 
+    batch_size = infer_batch_size(prepared)
+
+    if prepared.get("future_egomotion") is None:
+        seq = getattr(cfg, 'TIME_RECEPTIVE_FIELD', 1)
+        prepared["future_egomotion"] = torch.zeros(batch_size, seq, 6, device=device)
+
     if prepared.get("target_timestamp") is None:
-        future = prepared.get("future_egomotion")
-        if torch.is_tensor(future):
-            b, s, _ = future.shape
-            prepared["target_timestamp"] = torch.zeros(b, s, device=device)
+        seq = prepared["future_egomotion"].shape[1]
+        prepared["target_timestamp"] = torch.zeros(batch_size, seq, device=device)
     return prepared
 
 
@@ -123,7 +137,7 @@ def run_dataset_inference(cfg, args):
             print("[Warn] 达到数据集末尾，提前结束。")
             break
 
-        inputs = prepare_model_inputs(batch, device)
+        inputs = prepare_model_inputs(batch, device, cfg)
 
         if cfg.MODEL.MODALITY.USE_EVENT and inputs.get("event") is None:
             raise RuntimeError("当前 batch 缺少事件张量，无法测试事件分支。")
