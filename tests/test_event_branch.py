@@ -178,6 +178,7 @@ def run_dataset_inference(cfg, args):
 
         event_bev_inspect = None
         encoder_feats_shape = None
+        voxel_file_count = 0
         if cfg.MODEL.MODALITY.USE_EVENT:
             with torch.no_grad():
                 modality_probe = model.calculate_birds_eye_view_features(
@@ -202,6 +203,10 @@ def run_dataset_inference(cfg, args):
             encoder_feats_shape = tuple(encoder_feats.shape)
             print(f"[Event] Input frames shape: {tuple(frames.shape)}")
 
+            event_input = inputs.get("event")
+            if torch.is_tensor(event_input):
+                voxel_file_count = event_input.shape[1]
+
         with torch.no_grad():
             outputs = model(
                 inputs.get("image"),
@@ -223,6 +228,8 @@ def run_dataset_inference(cfg, args):
             print(f"[Event] BEV shape: {tuple(event_bev_inspect.shape)}")
         if encoder_feats_shape is not None:
             print(f"[Event] Encoder output shape: {encoder_feats_shape}")
+        if voxel_file_count:
+            print(f"[Event] Voxel files stacked: {voxel_file_count}")
 
 
 def build_test_cfg(use_camera=True):
