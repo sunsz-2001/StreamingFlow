@@ -176,6 +176,21 @@ def run_dataset_inference(cfg, args):
         if cfg.MODEL.MODALITY.USE_CAMERA and inputs.get("image") is None:
             raise RuntimeError("USE_CAMERA=True 但 batch['image'] 不存在。")
 
+        event_bev_inspect = None
+        if cfg.MODEL.MODALITY.USE_EVENT:
+            with torch.no_grad():
+                modality_probe = model.calculate_birds_eye_view_features(
+                    inputs.get("intrinsics"),
+                    inputs.get("extrinsics"),
+                    inputs.get("future_egomotion"),
+                    image=inputs.get("image") if model.use_camera else None,
+                    event=inputs.get("event"),
+                )
+            event_probe = modality_probe.get("event") if modality_probe else None
+            if not (isinstance(event_probe, dict) and torch.is_tensor(event_probe.get("bev"))):
+                raise RuntimeError("事件 BEV 探测失败，请检查输入事件张量是否有效。")
+            event_bev_inspect = event_probe["bev"].detach().cpu()
+
         with torch.no_grad():
             outputs = model(
                 inputs.get("image"),
@@ -193,11 +208,8 @@ def run_dataset_inference(cfg, args):
         print(f"\n[Info] Batch {step} 推理完成，输出结构：")
         describe_outputs("output", outputs)
 
-        event_out = outputs.get("event") if isinstance(outputs, dict) else None
-        if isinstance(event_out, dict):
-            bev = event_out.get("bev")
-            if torch.is_tensor(bev):
-                print(f"[Event] BEV shape: {tuple(bev.shape)}")
+        if event_bev_inspect is not None:
+            print(f"[Event] BEV shape: {tuple(event_bev_inspect.shape)}")
 
 
 def build_test_cfg(use_camera=True):
