@@ -108,6 +108,21 @@ def prepare_model_inputs(batch, device, cfg):
             channels = 2 * getattr(cfg.MODEL.EVENT, 'BINS', 10)
         h, w = cfg.IMAGE.FINAL_DIM
         prepared["event"] = torch.zeros(batch_size, seq, len(cfg.IMAGE.NAMES), channels, h, w, device=device)
+    else:
+        event = prepared.get("event")
+        if isinstance(event, list) or isinstance(event, tuple):
+            raise ValueError("事件输入需要整理为张量或支持的 dict 结构。")
+        if torch.is_tensor(event):
+            cur_seq = event.shape[1]
+            if cur_seq < seq:
+                pad = torch.zeros(
+                    (batch_size, seq - cur_seq) + tuple(event.shape[2:]),
+                    device=device,
+                    dtype=event.dtype,
+                )
+                prepared["event"] = torch.cat([event, pad], dim=1)
+            elif cur_seq > seq:
+                prepared["event"] = event[:, :seq]
     return prepared
 
 
