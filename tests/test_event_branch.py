@@ -84,13 +84,30 @@ def prepare_model_inputs(batch, device, cfg):
 
     batch_size = infer_batch_size(prepared)
 
+    seq = getattr(cfg, 'TIME_RECEPTIVE_FIELD', 1)
+
     if prepared.get("future_egomotion") is None:
-        seq = getattr(cfg, 'TIME_RECEPTIVE_FIELD', 1)
         prepared["future_egomotion"] = torch.zeros(batch_size, seq, 6, device=device)
 
     if prepared.get("target_timestamp") is None:
-        seq = prepared["future_egomotion"].shape[1]
         prepared["target_timestamp"] = torch.zeros(batch_size, seq, device=device)
+
+    if prepared.get("intrinsics") is None:
+        prepared["intrinsics"] = torch.eye(3, device=device).view(1, 1, 1, 3, 3).repeat(batch_size, seq, 1, 1, 1)
+
+    if prepared.get("extrinsics") is None:
+        prepared["extrinsics"] = torch.eye(4, device=device).view(1, 1, 1, 4, 4).repeat(batch_size, seq, 1, 1, 1)
+
+    if prepared.get("image") is None and cfg.MODEL.MODALITY.USE_CAMERA:
+        h, w = cfg.IMAGE.FINAL_DIM
+        prepared["image"] = torch.zeros(batch_size, seq, len(cfg.IMAGE.NAMES), 3, h, w, device=device)
+
+    if prepared.get("event") is None and cfg.MODEL.MODALITY.USE_EVENT:
+        channels = getattr(cfg.MODEL.EVENT, 'IN_CHANNELS', 0)
+        if channels <= 0:
+            channels = 2 * getattr(cfg.MODEL.EVENT, 'BINS', 10)
+        h, w = cfg.IMAGE.FINAL_DIM
+        prepared["event"] = torch.zeros(batch_size, seq, len(cfg.IMAGE.NAMES), channels, h, w, device=device)
     return prepared
 
 
