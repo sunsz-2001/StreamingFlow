@@ -195,8 +195,10 @@ def run_dataset_inference(cfg, args):
             # 直接跑一次 encoder forward 以检查输出形状
             frames = model._prepare_event_frames(inputs.get("event"), cfg.TIME_RECEPTIVE_FIELD, device=device)
             frames = frames[:, :cfg.TIME_RECEPTIVE_FIELD]
+            b, s, n, c, h, w = frames.shape
+            packed = frames.view(b, s * n, c, h, w)
             with torch.no_grad():
-                encoder_feats, _ = model.event_encoder_forward(frames)
+                encoder_feats, _ = model.event_encoder_forward(packed)
             encoder_feats_shape = tuple(encoder_feats.shape)
             print(f"[Event] Input frames shape: {tuple(frames.shape)}")
 
