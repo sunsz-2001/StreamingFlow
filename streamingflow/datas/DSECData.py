@@ -954,14 +954,11 @@ class DatasetDSEC(torch.utils.data.Dataset):
                     continue
                 voxel = np.load(event_path)['voxel'].astype(np.float32)
                 voxel = torch.from_numpy(voxel)
-                h, w = voxel.shape[-2:]
-                if self.event_scale != 1:
-                    target_hw = (int(h * self.event_scale), int(w * self.event_scale))
-                    voxel = F.interpolate(
-                        voxel.unsqueeze(0), size=target_hw, mode='bilinear', align_corners=False
-                    ).squeeze(0)
-                    h, w = target_hw
-                event_shape = (h, w)
+                target_h, target_w = self.cfg.IMAGE.FINAL_DIM
+                voxel = F.interpolate(
+                    voxel.unsqueeze(0), size=(target_h, target_w), mode='bilinear', align_corners=False
+                ).squeeze(0)
+                event_shape = (target_h, target_w)
                 event_frames.append(voxel)
             break
 
