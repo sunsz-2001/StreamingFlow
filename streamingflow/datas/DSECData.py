@@ -139,6 +139,7 @@ class DatasetDSEC(torch.utils.data.Dataset):
         self.cfg = cfg
         self.dataroot = self.data_cfg.DATASET.DATAROOT
         self.use_image = self.cfg.MODEL.MODALITY.USE_CAMERA
+        self.use_event = getattr(self.cfg.MODEL.MODALITY, 'USE_EVENT', False)
 
         self.mode = 'train' if self.is_train else 'val'
         self.box_type_3d, self.box_mode_3d = get_box_type('LiDAR')
@@ -937,35 +938,50 @@ class DatasetDSEC(torch.utils.data.Dataset):
                 events_list.append(event_tmp)
         return events_list
     
-    def get_events_grid(self,current_idx, idx_list):
-        evs_dict = {
-            'events': [],
-            'event_shape': {}
-            }
+    def get_events_grid(self, current_idx, idx_list):
+        if not self.use_event:
+            return {}
+
+        event_frames = []
+        event_shape = None
 
         for i in idx_list:
-            
-            event_paths = self.infos[i]['event_grid_paths']
-            for i in range(len(event_paths)):
-                event_path = event_paths[i]
-                voxel = np.load(event_path)['voxel']
-                    
-                ### resize image
-                # if self.event_scale != 1:
+            if i != current_idx:
+                continue
+            event_paths = self.infos[i].get('event_grid_paths', [])
+            for event_path in event_paths:
+                if not os.path.exists(event_path):
+                    continue
+                voxel = np.load(event_path)['voxel'].astype(np.float32)
                 voxel = torch.from_numpy(voxel)
-                voxel = voxel.unsqueeze(0)
-                _, B, H, W = voxel.shape
+                h, w = voxel.shape[-2:]
                 if self.event_scale != 1:
-                    voxel =  F.interpolate(voxel, size=(int(H * self.event_scale), int(W * self.event_scale)))
-                voxel = voxel.squeeze(0).numpy()
-                
-                if self.event_scale != 1:
-                    new_shape = [int(H * self.event_scale), int(W * self.event_scale)]
-                else:
-                    new_shape = [H, W]
-                evs_dict['event_shape'] = new_shape    
-                evs_dict['events_grid'].append(voxel)
-        return evs_dict
+                    target_hw = (int(h * self.event_scale), int(w * self.event_scale))
+                    voxel = F.interpolate(
+                        voxel.unsqueeze(0), size=target_hw, mode='bilinear', align_corners=False
+                    ).squeeze(0)
+                    h, w = target_hw
+                event_shape = (h, w)
+                event_frames.append(voxel)
+            break
+
+        if not event_frames:
+            return {'event': None, 'event_shape': event_shape}
+
+        event_tensor = torch.cat(event_frames, dim=0)  # [C_evt, H, W]
+        event_tensor = event_tensor.unsqueeze(0).unsqueeze(0).contiguous()
+        return {
+            'event': event_tensor.to(torch.float32),
+            'event_shape': event_shape,
+        }
+
+    def _build_dummy_event(self):
+        channels = getattr(self.cfg.MODEL.EVENT, 'IN_CHANNELS', 0)
+        if channels <= 0:
+            channels = 2 * getattr(self.cfg.MODEL.EVENT, 'BINS', 10)
+        h, w = self.cfg.IMAGE.FINAL_DIM
+        dummy = torch.zeros(1, 1, channels, h, w, dtype=torch.float32)
+        return dummy
     
     def inverse_T(self, T):
         assert T.shape == (4, 4)
@@ -1129,13 +1145,15 @@ class DatasetDSEC(torch.utils.data.Dataset):
         }
         # breakpoint()
         if self.use_image:
-            # TODO: add the corresponding image here
-            
-            # ev_dict = self.get_events(index, target_idx_list)
-            ev_grid_dict = self.get_events_grid(index, target_idx_list)
-            input_dict.update(ev_grid_dict)
             img_dict = self.get_images_and_params(index, target_idx_list)
             input_dict.update(img_dict)
+
+        if self.use_event:
+            ev_grid_dict = self.get_events_grid(index, target_idx_list)
+            event_tensor = ev_grid_dict.get('event')
+            if event_tensor is None:
+                event_tensor = self._build_dummy_event()
+            input_dict['event'] = event_tensor
             
         if 'seq_annos' in current_info:
 

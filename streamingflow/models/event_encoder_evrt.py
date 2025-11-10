@@ -33,6 +33,7 @@ class EventEncoderEvRT(nn.Module):
         self.out_channels = out_channels
 
         bins = getattr(cfg, "BINS", 10)
+        # C_evt
         in_channels = getattr(cfg, "IN_CHANNELS", 0)
         if in_channels <= 0:
             in_channels = 2 * bins
