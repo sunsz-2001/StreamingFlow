@@ -169,6 +169,16 @@ def run_dataset_inference(cfg, args):
             print("[Warn] 达到数据集末尾，提前结束。")
             break
 
+        raw_voxel_count = batch.get('event_voxel_count')
+        if torch.is_tensor(raw_voxel_count):
+            voxel_count_value = int(raw_voxel_count[0].item())
+        elif isinstance(raw_voxel_count, (list, tuple)):
+            voxel_count_value = int(raw_voxel_count[0])
+        elif raw_voxel_count is None:
+            voxel_count_value = 0
+        else:
+            voxel_count_value = int(raw_voxel_count)
+
         inputs = prepare_model_inputs(batch, device, cfg)
 
         if cfg.MODEL.MODALITY.USE_EVENT and inputs.get("event") is None:
@@ -205,7 +215,10 @@ def run_dataset_inference(cfg, args):
 
             event_input = inputs.get("event")
             if torch.is_tensor(event_input):
-                voxel_file_count = event_input.shape[1]
+                channels = event_input.shape[3]
+            else:
+                channels = 0
+            voxel_file_count = voxel_count_value
 
         with torch.no_grad():
             outputs = model(
@@ -228,8 +241,8 @@ def run_dataset_inference(cfg, args):
             print(f"[Event] BEV shape: {tuple(event_bev_inspect.shape)}")
         if encoder_feats_shape is not None:
             print(f"[Event] Encoder output shape: {encoder_feats_shape}")
-        if voxel_file_count:
-            print(f"[Event] Voxel files stacked: {voxel_file_count}")
+        if cfg.MODEL.MODALITY.USE_EVENT:
+            print(f"[Event] Voxel files stacked: {voxel_file_count}, Channels: {channels}")
 
 
 def build_test_cfg(use_camera=True):

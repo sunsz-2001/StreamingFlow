@@ -944,6 +944,7 @@ class DatasetDSEC(torch.utils.data.Dataset):
 
         event_frames = []
         event_shape = None
+        voxel_file_count = 0
 
         for i in idx_list:
             if i != current_idx:
@@ -960,16 +961,18 @@ class DatasetDSEC(torch.utils.data.Dataset):
                 ).squeeze(0)
                 event_shape = (target_h, target_w)
                 event_frames.append(voxel)
+                voxel_file_count += 1
             break
 
         if not event_frames:
-            return {'event': None, 'event_shape': event_shape}
+            return {'event': None, 'event_shape': event_shape, 'event_voxel_count': 0}
 
         event_tensor = torch.cat(event_frames, dim=0)  # [C_evt, H, W]
         event_tensor = event_tensor.unsqueeze(0).unsqueeze(0).contiguous()
         return {
             'event': event_tensor.to(torch.float32),
             'event_shape': event_shape,
+            'event_voxel_count': voxel_file_count,
         }
 
     def _build_dummy_event(self):
@@ -978,7 +981,7 @@ class DatasetDSEC(torch.utils.data.Dataset):
             channels = 2 * getattr(self.cfg.MODEL.EVENT, 'BINS', 10)
         h, w = self.cfg.IMAGE.FINAL_DIM
         dummy = torch.zeros(1, 1, channels, h, w, dtype=torch.float32)
-        return dummy
+        return dummy, 0
     
     def inverse_T(self, T):
         assert T.shape == (4, 4)
@@ -1148,9 +1151,11 @@ class DatasetDSEC(torch.utils.data.Dataset):
         if self.use_event:
             ev_grid_dict = self.get_events_grid(index, target_idx_list)
             event_tensor = ev_grid_dict.get('event')
+            voxel_file_count = ev_grid_dict.get('event_voxel_count', 0)
             if event_tensor is None:
-                event_tensor = self._build_dummy_event()
+                event_tensor, voxel_file_count = self._build_dummy_event()
             input_dict['event'] = event_tensor
+            input_dict['event_voxel_count'] = voxel_file_count
             
         if 'seq_annos' in current_info:
 
