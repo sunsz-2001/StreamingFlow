@@ -177,6 +177,7 @@ def run_dataset_inference(cfg, args):
             raise RuntimeError("USE_CAMERA=True 但 batch['image'] 不存在。")
 
         event_bev_inspect = None
+        encoder_feats_shape = None
         if cfg.MODEL.MODALITY.USE_EVENT:
             with torch.no_grad():
                 modality_probe = model.calculate_birds_eye_view_features(
@@ -190,6 +191,15 @@ def run_dataset_inference(cfg, args):
             if not (isinstance(event_probe, dict) and torch.is_tensor(event_probe.get("bev"))):
                 raise RuntimeError("事件 BEV 探测失败，请检查输入事件张量是否有效。")
             event_bev_inspect = event_probe["bev"].detach().cpu()
+
+            # 直接跑一次 encoder forward 以检查输出形状
+            frames = model._prepare_event_frames(inputs.get("event"), cfg.TIME_RECEPTIVE_FIELD, device=device)
+            frames = frames[:, :cfg.TIME_RECEPTIVE_FIELD]
+            packed = frames.view(-1, frames.size(3), frames.size(4), frames.size(5))
+            with torch.no_grad():
+                encoder_feats, _ = model.event_encoder_forward(packed)
+            encoder_feats_shape = tuple(encoder_feats.shape)
+            print(f"[Event] Input frames shape: {tuple(frames.shape)}")
 
         with torch.no_grad():
             outputs = model(
@@ -210,6 +220,8 @@ def run_dataset_inference(cfg, args):
 
         if event_bev_inspect is not None:
             print(f"[Event] BEV shape: {tuple(event_bev_inspect.shape)}")
+        if encoder_feats_shape is not None:
+            print(f"[Event] Encoder output shape: {encoder_feats_shape}")
 
 
 def build_test_cfg(use_camera=True):
