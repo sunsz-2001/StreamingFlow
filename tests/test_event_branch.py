@@ -196,11 +196,8 @@ def run_dataset_inference(cfg, args):
         event_out = outputs.get("event") if isinstance(outputs, dict) else None
         if isinstance(event_out, dict):
             bev = event_out.get("bev")
-            depth = event_out.get("depth")
             if torch.is_tensor(bev):
                 print(f"[Event] BEV shape: {tuple(bev.shape)}")
-            if torch.is_tensor(depth):
-                print(f"[Event] Depth logits shape: {tuple(depth.shape)}")
 
 
 def build_test_cfg(use_camera=True):
