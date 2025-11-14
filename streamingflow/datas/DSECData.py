@@ -140,6 +140,7 @@ class DatasetDSEC(torch.utils.data.Dataset):
         self.dataroot = self.data_cfg.DATASET.DATAROOT
         self.use_image = self.cfg.MODEL.MODALITY.USE_CAMERA
         self.use_event = getattr(self.cfg.MODEL.MODALITY, 'USE_EVENT', False)
+        self.use_lidar = getattr(self.cfg.MODEL.MODALITY, 'USE_LIDAR', False)
 
         self.mode = 'train' if self.is_train else 'val'
         self.box_type_3d, self.box_mode_3d = get_box_type('LiDAR')
@@ -1135,14 +1136,19 @@ class DatasetDSEC(torch.utils.data.Dataset):
     def __getitem__(self, index):
         current_info = copy.deepcopy(self.infos[index])
         target_idx_list = self.get_sweep_idxs(current_info, current_idx=index)
-        target_infos, points = self.get_infos_and_points(target_idx_list)
-        points = points[0]
+        
         input_dict = {
-            'points': points,
             'frame_id': current_info['sample_idx'],
             'pose': current_info['pose'],
             'sequence_name': current_info['sequence_name'],
         }
+        
+        # 根据配置条件加载点云数据
+        if self.use_lidar:
+            target_infos, points = self.get_infos_and_points(target_idx_list)
+            points = points[0]
+            input_dict['points'] = points
+        
         # breakpoint()
         if self.use_image:
             img_dict = self.get_images_and_params(index, target_idx_list)

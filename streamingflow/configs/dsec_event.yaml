@@ -1,7 +1,7 @@
 TAG: 'dsec_event_eval'
 
 GPUS: [0]
-BATCHSIZE: 1
+BATCHSIZE: 10
 PRECISION: 32
 EPOCHS: 1
 
@@ -9,8 +9,8 @@ N_WORKERS: 4
 
 DATASET:
   NAME: 'dsec'
-  DATAROOT: '/abs/path/to/dsec_root'
-  EVENTS_ROOT: '/abs/path/to/dsec_events'  # 若事件帧已与图像同目录，可保留为空
+  DATAROOT: '/media/switcher/sda/datasets/dsec'
+  EVENTS_ROOT: ''  # 若事件帧已与图像同目录，可保留为空
   EVENTS_FILE_SUFFIX: '.npz'
   EVENTS_NORMALIZATION: 255.0
   EVENTS_FALLBACK_ZERO: True
@@ -46,8 +46,8 @@ MODEL:
     USE_DEPTH_DISTRIBUTION: False
   EVENT:
     BACKBONE: 'presnet50'
-    BINS: 10
-    IN_CHANNELS: 0  # 自动使用 2 * BINS
+    BINS: 5
+    IN_CHANNELS: 50  # 自动使用 2 * BINS
     HIDDEN_DIM: 256
     NUM_ENCODER_LAYERS: 1
     NUM_HEADS: 8
