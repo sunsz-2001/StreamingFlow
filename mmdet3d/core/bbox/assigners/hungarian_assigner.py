@@ -39,8 +39,7 @@ class IoU3DCost(object):
 class HeuristicAssigner3D(BaseAssigner):
     def __init__(self,
                  dist_thre=100,
-                 iou_calculator=dict(type='BboxOverlaps3D')
-                 ):
+                 iou_calculator=dict(type='BboxOverlaps3D')):
         self.dist_thre = dist_thre  # distance in meter
         self.iou_calculator = build_iou_calculator(iou_calculator)
 
@@ -84,8 +83,7 @@ class HungarianAssigner3D(BaseAssigner):
                  cls_cost=dict(type='ClassificationCost', weight=1.),
                  reg_cost=dict(type='BBoxBEVL1Cost', weight=1.0),
                  iou_cost=dict(type='IoU3DCost', weight=1.0),
-                 iou_calculator=dict(type='BboxOverlaps3D')
-                 ):
+                 iou_calculator=dict(type='BboxOverlaps3D')):
         self.cls_cost = build_match_cost(cls_cost)
         self.reg_cost = build_match_cost(reg_cost)
         self.iou_cost = build_match_cost(iou_cost)
@@ -106,8 +104,11 @@ class HungarianAssigner3D(BaseAssigner):
             if num_gts == 0:
                 # No ground truth, assign all to background
                 assigned_gt_inds[:] = 0
+            # Return zero tensor for max_overlaps to maintain interface consistency
+            # (all proposals are background when no GT, IoU is 0)
+            max_overlaps = bboxes.new_zeros(num_bboxes)
             return AssignResult(
-                num_gts, assigned_gt_inds, None, labels=assigned_labels)
+                num_gts, assigned_gt_inds, max_overlaps, labels=assigned_labels)
 
         # 2. compute the weighted costs
         # see mmdetection/mmdet/core/bbox/match_costs/match_cost.py
@@ -121,10 +122,19 @@ class HungarianAssigner3D(BaseAssigner):
 
         # 3. do Hungarian matching on CPU using linear_sum_assignment
         cost = cost.detach().cpu()
+        
+        # Validate cost matrix before Hungarian matching
+        if torch.isnan(cost).any():
+            stats = f"min={cost.min().item():.6f}, max={cost.max().item():.6f}, mean={cost.mean().item():.6f}"
+            raise ValueError(f"NaN detected in Hungarian assigner cost matrix. Stats: {stats}, shape: {cost.shape}")
+        if torch.isinf(cost).any():
+            stats = f"min={cost.min().item():.6f}, max={cost.max().item():.6f}, mean={cost.mean().item():.6f}"
+            raise ValueError(f"Inf detected in Hungarian assigner cost matrix. Stats: {stats}, shape: {cost.shape}")
+        
         if linear_sum_assignment is None:
             raise ImportError('Please run "pip install scipy" '
-                              'to install scipy first.')
-        matched_row_inds, matched_col_inds = linear_sum_assignment(cost)
+                            'to install scipy first.')
+        matched_row_inds, matched_col_inds = linear_sum_assignment(cost.numpy())
         matched_row_inds = torch.from_numpy(matched_row_inds).to(bboxes.device)
         matched_col_inds = torch.from_numpy(matched_col_inds).to(bboxes.device)
 

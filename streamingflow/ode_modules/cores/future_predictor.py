@@ -32,6 +32,7 @@ class FuturePredictionODE(nn.Module):
         delta_t=0.05,
     ):
         super().__init__()
+        self.n_future = n_future
         self.n_spatial_gru = n_gru_blocks
         self.delta_t = delta_t
         self.gru_ode = NNFOwithBayesianJumps(
@@ -90,12 +91,37 @@ class FuturePredictionODE(nn.Module):
 
             # ODE 模块会输出与 `target_timestamp` 对齐的隐 BEV 序列；
             # `auxilary_loss` 包含在 NNFOwithBayesianJumps 内部估计的 KL 等正则项。
+            # 生成未来时间点：从当前时间(0)到target_timestamp，等间隔生成n_future个点
+            target_time = target_timestamp[bs]
+            if torch.is_tensor(target_time):
+                target_time = target_time.item()
+            
+            # 生成 n_future 个等间隔的未来时间点
+            # 例如：n_future=6, target_time=0.6 -> [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+            if self.n_future > 1:
+                time_step = target_time / self.n_future
+                T = torch.arange(
+                    1, self.n_future + 1, 
+                    dtype=future_prediction_input.dtype, 
+                    device=future_prediction_input.device
+                ) * time_step
+            else:
+                # 如果只有1个未来帧，直接使用target_time
+                T = torch.tensor(
+                    [target_time], 
+                    dtype=future_prediction_input.dtype, 
+                    device=future_prediction_input.device
+                )
+            
+            # 为当前 batch 提取对应的输入
+            input_bs = future_prediction_input[bs:bs+1]  # [1, 1, C, H, W]
+            
             _, auxilary_loss, predict_x = self.gru_ode(
                 times=times,
-                input=future_prediction_input,
+                input=input_bs,
                 obs=observations,
                 delta_t=self.delta_t,
-                T=target_timestamp[bs],
+                T=T,
             )
             batch_outputs.append(predict_x)
 

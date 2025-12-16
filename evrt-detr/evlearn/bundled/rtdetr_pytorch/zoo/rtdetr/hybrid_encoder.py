@@ -283,6 +283,7 @@ class HybridEncoder(nn.Module):
 
     def forward(self, feats):
         assert len(feats) == len(self.in_channels)
+        
         proj_feats = [self.input_proj[i](feat) for i, feat in enumerate(feats)]
         
         # encoder
@@ -305,12 +306,18 @@ class HybridEncoder(nn.Module):
 
         # broadcasting and fusion
         inner_outs = [proj_feats[-1]]
+        
         for idx in range(len(self.in_channels) - 1, 0, -1):
             feat_high = inner_outs[0]
             feat_low = proj_feats[idx - 1]
+            
             feat_high = self.lateral_convs[len(self.in_channels) - 1 - idx](feat_high)
+            
             inner_outs[0] = feat_high
-            upsample_feat = F.interpolate(feat_high, scale_factor=2., mode='nearest')
+            # 使用目标尺寸而不是scale_factor，确保与feat_low的尺寸匹配
+            target_h, target_w = feat_low.shape[2], feat_low.shape[3]
+            upsample_feat = F.interpolate(feat_high, size=(target_h, target_w), mode='bilinear', align_corners=False)
+            
             inner_out = self.fpn_blocks[len(self.in_channels)-1-idx](torch.concat([upsample_feat, feat_low], dim=1))
             inner_outs.insert(0, inner_out)
 
@@ -319,7 +326,13 @@ class HybridEncoder(nn.Module):
             feat_low = outs[-1]
             feat_high = inner_outs[idx + 1]
             downsample_feat = self.downsample_convs[idx](feat_low)
+            # 如果尺寸不匹配，调整downsample_feat到feat_high的尺寸
+            if downsample_feat.shape[2:] != feat_high.shape[2:]:
+                target_h, target_w = feat_high.shape[2], feat_high.shape[3]
+                downsample_feat = F.interpolate(downsample_feat, size=(target_h, target_w), mode='bilinear', align_corners=False)
             out = self.pan_blocks[idx](torch.concat([downsample_feat, feat_high], dim=1))
             outs.append(out)
+        
+        print(f"[HybridEncoder] input: {[f.shape for f in feats]} -> output: {[o.shape for o in outs]}")
 
         return outs

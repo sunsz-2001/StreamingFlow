@@ -33,7 +33,10 @@ class TransFusionBBoxCoder(BaseBBoxCoder):
         targets[:, 6] = torch.sin(dst_boxes[:, 6])
         targets[:, 7] = torch.cos(dst_boxes[:, 6])
         if self.code_size == 10:
-            targets[:, 8:10] = dst_boxes[:, 7:]
+            # Handle cases where input has only 7 dims (no velocity) vs 9 dims (with velocity)
+            if dst_boxes.shape[1] >= 9:
+                targets[:, 8:10] = dst_boxes[:, 7:9]
+            # If input has only 7 dims, velocity is zero (already initialized by torch.zeros)
         return targets
 
     def decode(self, heatmap, rot, dim, center, height, vel, filter=False):

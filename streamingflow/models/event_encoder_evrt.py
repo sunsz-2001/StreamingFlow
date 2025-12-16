@@ -4,6 +4,22 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+
+def _validate_tensor(tensor, name, allow_inf=False):
+    """Validate tensor for NaN/Inf values and raise error if found.
+    
+    Args:
+        tensor: Tensor to validate
+        name: Name for error message
+        allow_inf: If True, only check for NaN, not Inf
+    """
+    if torch.isnan(tensor).any():
+        stats = f"min={tensor.min().item():.6f}, max={tensor.max().item():.6f}, mean={tensor.mean().item():.6f}"
+        raise ValueError(f"NaN detected in {name}. Stats: {stats}, shape: {tensor.shape}")
+    if not allow_inf and torch.isinf(tensor).any():
+        stats = f"min={tensor.min().item():.6f}, max={tensor.max().item():.6f}, mean={tensor.mean().item():.6f}"
+        raise ValueError(f"Inf detected in {name}. Stats: {stats}, shape: {tensor.shape}")
+
 try:
     from evlearn.bundled.rtdetr_pytorch.nn.backbone.presnet import PResNet
     from evlearn.bundled.rtdetr_pytorch.zoo.rtdetr.hybrid_encoder import HybridEncoder
@@ -100,8 +116,36 @@ class EventEncoderEvRT(nn.Module):
             features: Tensor of shape (B, out_channels, H/8, W/8)
             depth_logits: Tensor of shape (B, depth_bins, H/8, W/8) or None
         """
+        # Validate input
+        _validate_tensor(x, "EventEncoderEvRT input")
+        
+        # Validate backbone parameters (only in training)
+        if self.training:
+            for name, param in self.backbone.named_parameters():
+                if torch.isnan(param).any() or torch.isinf(param).any():
+                    stats = f"min={param.min().item():.6f}, max={param.max().item():.6f}, mean={param.mean().item():.6f}"
+                    raise ValueError(f"NaN/Inf in backbone parameter {name}. Stats: {stats}")
+        
+        # Validate BatchNorm running stats
+        for name, module in self.backbone.named_modules():
+            if isinstance(module, (nn.BatchNorm2d, nn.BatchNorm1d)):
+                if hasattr(module, 'running_mean') and module.running_mean is not None:
+                    if torch.isnan(module.running_mean).any() or torch.isinf(module.running_mean).any():
+                        raise ValueError(f"NaN/Inf in backbone BatchNorm running_mean: {name}")
+                if hasattr(module, 'running_var') and module.running_var is not None:
+                    if torch.isnan(module.running_var).any() or torch.isinf(module.running_var).any():
+                        raise ValueError(f"NaN/Inf in backbone BatchNorm running_var: {name}")
+                    if (module.running_var <= 0).any():
+                        raise ValueError(f"Non-positive variance in backbone BatchNorm running_var: {name}, min={module.running_var.min().item()}")
+        
         feats: List[torch.Tensor] = self.backbone(x)
+        for i, feat in enumerate(feats):
+            _validate_tensor(feat, f"EventEncoderEvRT backbone output[{i}]")
+        
         encoded: List[torch.Tensor] = self.hybrid_encoder(feats)
+        for i, enc in enumerate(encoded):
+            _validate_tensor(enc, f"EventEncoderEvRT hybrid_encoder output[{i}]")
+        
         p3 = encoded[0]
 
         if self.multiscale_fusion == "sum" and len(encoded) > 1:
@@ -117,12 +161,18 @@ class EventEncoderEvRT(nn.Module):
             fused = torch.cat(resized, dim=1)
         else:
             fused = p3
+        
+        _validate_tensor(fused, "EventEncoderEvRT fused features")
 
         out = self.output_proj(fused)
+        _validate_tensor(out, "EventEncoderEvRT output_proj output")
+        
         depth_logits: Optional[torch.Tensor] = None
         if self.depth_head is not None:
             skip_feat = encoded[1] if len(encoded) > 1 else None
             depth_logits = self.depth_head(p3, skip_feat)
+            if depth_logits is not None:
+                _validate_tensor(depth_logits, "EventEncoderEvRT depth_head output")
         return out, depth_logits
 
 

@@ -10,6 +10,7 @@ import cv2
 import torch
 import torchvision
 import torch.nn.functional as F
+# torch在prepare_data中也需要使用，已在文件顶部导入
 from pyquaternion import Quaternion
 from nuscenes.nuscenes import NuScenes
 from nuscenes.utils.splits import create_splits_scenes
@@ -141,6 +142,9 @@ class DatasetDSEC(torch.utils.data.Dataset):
         self.use_image = self.cfg.MODEL.MODALITY.USE_CAMERA
         self.use_event = getattr(self.cfg.MODEL.MODALITY, 'USE_EVENT', False)
         self.use_lidar = getattr(self.cfg.MODEL.MODALITY, 'USE_LIDAR', False)
+        self.use_flow_data = self.data_cfg.DATASET.USE_FLOW_DATA  # 是否使用流式数据格式
+        self.num_speed = 20
+        self.event_speed = 100
 
         self.mode = 'train' if self.is_train else 'val'
         self.box_type_3d, self.box_mode_3d = get_box_type('LiDAR')
@@ -171,7 +175,9 @@ class DatasetDSEC(torch.utils.data.Dataset):
 
         # Spatial extent in bird's-eye view, in meters
         self.spatial_extent = (self.cfg.LIFT.X_BOUND[1], self.cfg.LIFT.Y_BOUND[1])
-        self.class_names = ['Vehicle', 'Pedestrian']
+        # DSEC数据集中的类别：Vehicle, Cyclist, Pedestrian
+        # 注意：数据集中实际包含3个类别，之前遗漏了Pedestrian
+        self.class_names = ['Vehicle', 'Cyclist', 'Pedestrian']
 
 
 
@@ -181,11 +187,12 @@ class DatasetDSEC(torch.utils.data.Dataset):
         sample_sequence_list = [x.strip() for x in open(split_dir).readlines()]
 
         self.infos = []
+        self.dataloader_index = []
         self.init_infos(sample_sequence_list)
         return sample_sequence_list
     
     def init_infos(self, sample_sequence_list):
-        
+        counter = 0
         waymo_infos = []
         num_skipped_infos = 0
         for k in range(len(sample_sequence_list)):
@@ -210,29 +217,31 @@ class DatasetDSEC(torch.utils.data.Dataset):
                 
                 for i in range(len(infos)):
                     new_info = copy.deepcopy(infos[i])
+                    if new_info['sample_idx']!=30:    
+                        self.dataloader_index.append(counter)
+                    counter+=1
                     event_grid_paths = []
                     event_paths = []
                     img_infos = infos[i]['image']
                     lidar_path = os.path.join(self.dataroot, infos[i]['lidar_path'])
                     event_init_path = os.path.join(self.dataroot, 
                                                    img_infos['image_0_path'].split('/')[0], 
-                                                   'events_split',
+                                                   'events_split_100hz',
                                                    )
                     event_grid_init_path = os.path.join(self.dataroot,
                                                    img_infos['image_0_path'].split('/')[0], 
-                                                   'voxel',
+                                                   'voxel_wstmp',
                                                    )
                     event_file_number = int(img_infos['event_0_path'].split('/')[-1][:6]) + 2
                     event_file_name = str(event_file_number).zfill(6)
                     
-                    for j in range(100):
-                        event_paths.append(os.path.join(event_init_path, event_file_name + '_' + str(j) + '.npz'))
-                    event_paths = np.array(event_paths)
-                    new_info['event_paths'] = event_paths
-                    for j in range(10):
+                    for j in range(self.event_speed//10):
                         event_grid_paths.append(os.path.join(event_grid_init_path, event_file_name + '_' + str(j+1) + '.npz'))
+                        event_paths.append(os.path.join(event_init_path, event_file_name + '_' + str(j) + '.npz'))
                     event_grid_paths = np.array(event_grid_paths)
+                    event_paths = np.array(event_paths)
                     new_info['event_grid_paths'] = event_grid_paths
+                    new_info['event_paths'] = event_paths
                     
                     new_info['seq_annos'] = np.array(infos[i]['annos'])
                     
@@ -244,6 +253,9 @@ class DatasetDSEC(torch.utils.data.Dataset):
 
                 for i in range(len(infos)):
                     new_info = copy.deepcopy(infos[i])
+                    if new_info['sample_idx']!=30:    
+                        self.dataloader_index.append(counter)
+                    counter+=1
                     event_paths = []
                     event_grid_paths = []
                     # new_info['annos'] = infos[i]['annos'][j]
@@ -251,25 +263,22 @@ class DatasetDSEC(torch.utils.data.Dataset):
                     lidar_path = os.path.join(self.dataroot, infos[i]['lidar_path'])
                     event_init_path = os.path.join(self.dataroot,
                                                    img_infos['image_0_path'].split('/')[0], 
-                                                   'events_split',
+                                                   'events_split_100hz',
                                                    )
                     event_grid_init_path = os.path.join(self.dataroot,
                                                    img_infos['image_0_path'].split('/')[0], 
-                                                   'voxel',
+                                                   'voxel_wstmp',
                                                    )
                     event_file_number = int(img_infos['event_0_path'].split('/')[-1][:6]) + 2
                     event_file_name = str(event_file_number).zfill(6)
                     
-                    for j in range(100):
-                        event_paths.append(os.path.join(event_init_path, event_file_name + '_' + str(j) + '.npz'))
-                    event_paths = np.array(event_paths)
-                    new_info['event_paths'] = event_paths
-
-                    for j in range(10):
+                    for j in range(self.event_speed//10):
                         event_grid_paths.append(os.path.join(event_grid_init_path, event_file_name + '_' + str(j+1) + '.npz'))
+                        event_paths.append(os.path.join(event_init_path, event_file_name + '_' + str(j) + '.npz'))
                     event_grid_paths = np.array(event_grid_paths)
+                    event_paths = np.array(event_paths)
                     new_info['event_grid_paths'] = event_grid_paths
-                    
+                    new_info['event_paths'] = event_paths
                     new_info['seq_annos'] = np.array(infos[i]['annos'])
                     new_infos.append(new_info)
                 infos = new_infos
@@ -677,13 +686,150 @@ class DatasetDSEC(torch.utils.data.Dataset):
 
         return infos, points
     
-    # def get_label(self, rec, instance_map, in_pred):
-    #     segmentation_np, instance_np, instance_map = \
-    #         self.get_birds_eye_view_label(rec, instance_map)
-    #     segmentation = torch.from_numpy(segmentation_np).long().unsqueeze(0).unsqueeze(0)
-    #     instance = torch.from_numpy(instance_np).long().unsqueeze(0)
+    def _get_ego_pose_from_matrix(self, pose_matrix):
+        """从4x4变换矩阵提取ego pose的translation和rotation"""
+        translation = -pose_matrix[:3, 3]
+        rotation_matrix = pose_matrix[:3, :3]
+        # 从旋转矩阵提取yaw角
+        yaw = np.arctan2(rotation_matrix[1, 0], rotation_matrix[0, 0])
+        rotation = Quaternion(scalar=np.cos(yaw / 2), vector=[0, 0, np.sin(yaw / 2)]).inverse
+        return translation, rotation
 
-    #     return segmentation, instance, instance_map
+    def _get_poly_region_from_box_lidar(self, box_lidar, ego_translation, ego_rotation):
+        """从gt_boxes_lidar格式的框生成BEV多边形区域"""
+        # box_lidar格式: [x, y, z, dx, dy, dz, heading, ...]
+        center = box_lidar[:3]
+        size = box_lidar[3:6]
+        heading = box_lidar[6]
+        
+        # 创建Box对象
+        box = Box(center, size, Quaternion(axis=[0, 0, 1], angle=heading))
+        box.translate(ego_translation)
+        box.rotate(ego_rotation)
+        
+        # 获取底部四个角点并投影到BEV
+        pts = box.bottom_corners()[:2].T
+        pts = np.round((pts - self.bev_start_position[:2] + self.bev_resolution[:2] / 2.0) / self.bev_resolution[:2]).astype(np.int32)
+        pts[:, [1, 0]] = pts[:, [0, 1]]  # 交换x和y
+        
+        return pts
+
+    def get_label_from_boxes(self, gt_boxes_lidar, gt_names, gt_obj_ids, pose_matrix, instance_map):
+        """从gt_boxes_lidar生成BEV分割标签（适配DSEC数据格式）"""
+        translation, rotation = self._get_ego_pose_from_matrix(pose_matrix)
+        segmentation = np.zeros((self.bev_dimension[0], self.bev_dimension[1]))
+        instance = np.zeros((self.bev_dimension[0], self.bev_dimension[1]))
+        
+        # 过滤车辆类别（DSEC数据集）
+        vehicle_classes = ['Vehicle', 'vehicle', 'car', 'bus', 'truck', 'trailer', 'construction_vehicle']
+        
+        if len(gt_boxes_lidar) == 0:
+            return segmentation, instance, instance_map
+        
+        for i in range(len(gt_boxes_lidar)):
+            box_lidar = gt_boxes_lidar[i]
+            # 确保box_lidar是数组格式
+            if isinstance(box_lidar, (list, tuple)):
+                box_lidar = np.array(box_lidar)
+            
+            # 处理名称（可能是字符串或numpy数组）
+            if isinstance(gt_names, np.ndarray):
+                name = str(gt_names[i]) if i < len(gt_names) else 'Vehicle'
+            else:
+                name = gt_names[i] if i < len(gt_names) else 'Vehicle'
+            
+            obj_id = gt_obj_ids[i] if i < len(gt_obj_ids) else i
+            
+            # 只处理车辆类别
+            if name not in vehicle_classes:
+                continue
+            
+            # 获取实例ID
+            if obj_id not in instance_map:
+                instance_map[obj_id] = len(instance_map) + 1
+            instance_id = instance_map[obj_id]
+            
+            # 获取BEV多边形区域
+            try:
+                poly_region = self._get_poly_region_from_box_lidar(box_lidar, translation, rotation)
+                # 确保多边形在BEV范围内
+                poly_region = np.clip(poly_region, 0, [self.bev_dimension[1]-1, self.bev_dimension[0]-1])
+                
+                # 填充分割和实例掩码
+                cv2.fillPoly(instance, [poly_region], instance_id)
+                cv2.fillPoly(segmentation, [poly_region], 1.0)
+            except Exception as e:
+                # 如果投影失败，跳过这个框
+                continue
+        
+        return segmentation, instance, instance_map
+
+    def get_label(self, info_dict, instance_map, in_pred):
+        """从DSEC数据格式生成BEV分割标签"""
+        # 从info_dict中提取数据
+        if 'seq_annos' not in info_dict:
+            # 如果没有seq_annos，尝试使用原始的annos
+            if 'annos' not in info_dict or len(info_dict['annos']) == 0:
+                # 如果没有标注，返回空标签
+                segmentation = np.zeros((self.bev_dimension[0], self.bev_dimension[1]))
+                instance = np.zeros((self.bev_dimension[0], self.bev_dimension[1]))
+                segmentation = torch.from_numpy(segmentation).long().unsqueeze(0).unsqueeze(0)
+                instance = torch.from_numpy(instance).long().unsqueeze(0)
+                return segmentation, instance, instance_map
+            # 使用原始annos的第一帧（当前帧）
+            annos_list = info_dict['annos']
+            if isinstance(annos_list, (list, np.ndarray)) and len(annos_list) > 0:
+                annos = annos_list[0]
+            else:
+                annos = annos_list
+        else:
+            # 使用seq_annos（在init_infos中已转换）
+            seq_annos = info_dict['seq_annos']
+            if isinstance(seq_annos, np.ndarray):
+                # numpy array，每个元素是一帧的标注
+                if len(seq_annos) > 0:
+                    annos = seq_annos[0]  # 使用第一帧的标注（当前帧）
+                else:
+                    # 空标注
+                    segmentation = np.zeros((self.bev_dimension[0], self.bev_dimension[1]))
+                    instance = np.zeros((self.bev_dimension[0], self.bev_dimension[1]))
+                    segmentation = torch.from_numpy(segmentation).long().unsqueeze(0).unsqueeze(0)
+                    instance = torch.from_numpy(instance).long().unsqueeze(0)
+                    return segmentation, instance, instance_map
+            elif isinstance(seq_annos, list) and len(seq_annos) > 0:
+                annos = seq_annos[0]
+            else:
+                # 空标注
+                segmentation = np.zeros((self.bev_dimension[0], self.bev_dimension[1]))
+                instance = np.zeros((self.bev_dimension[0], self.bev_dimension[1]))
+                segmentation = torch.from_numpy(segmentation).long().unsqueeze(0).unsqueeze(0)
+                instance = torch.from_numpy(instance).long().unsqueeze(0)
+                return segmentation, instance, instance_map
+        
+        # 提取标注数据
+        if not isinstance(annos, dict) or 'gt_boxes_lidar' not in annos:
+            # 无效的标注格式
+            segmentation = np.zeros((self.bev_dimension[0], self.bev_dimension[1]))
+            instance = np.zeros((self.bev_dimension[0], self.bev_dimension[1]))
+            segmentation = torch.from_numpy(segmentation).long().unsqueeze(0).unsqueeze(0)
+            instance = torch.from_numpy(instance).long().unsqueeze(0)
+            return segmentation, instance, instance_map
+        
+        gt_boxes_lidar = annos['gt_boxes_lidar']
+        gt_names = annos['name']
+        gt_obj_ids = annos['obj_ids']
+        pose_matrix = info_dict.get('pose', np.eye(4))
+        
+        # 生成BEV标签
+        segmentation_np, instance_np, instance_map = self.get_label_from_boxes(
+            gt_boxes_lidar, gt_names, gt_obj_ids, pose_matrix, instance_map
+        )
+        
+        # 转换为torch tensor
+        segmentation = torch.from_numpy(segmentation_np).long().unsqueeze(0).unsqueeze(0)
+        instance = torch.from_numpy(instance_np).long().unsqueeze(0)
+        
+        return segmentation, instance, instance_map
 
 
     def get_future_egomotion(self, rec, index):
@@ -717,7 +863,7 @@ class DatasetDSEC(torch.utils.data.Dataset):
         return future_egomotion.unsqueeze(0)
 
     def __len__(self):
-        return len(self.infos)
+        return len(self.dataloader_index)
 
     def get_temporal_voxels(self,index):
         if self.cfg.GEN.GEN_VOXELS:
@@ -923,59 +1069,94 @@ class DatasetDSEC(torch.utils.data.Dataset):
 
         return target_idx_list
 
-    def get_events(self, current_idx, idx_list):
-        
-        events_list = []
+    def get_events(self, current_idx, idx_list, time_stmp):
+        # ************DEPRECATED********************
+        event_tmp = {}
+        evs_norm_list = []
+        evs_loc_list = []
+        evs_stmp = []
         for i in idx_list:
-            event_tmp = {}
+            
             if i != current_idx: continue
             # pdb.set_trace()
             event_paths = self.infos[i]['event_paths']
             for i in range(len(event_paths)):
                 event_path = event_paths[i]
                 events = np.load(event_path, allow_pickle=True)
-                event_tmp['evs_norm'] = torch.from_numpy(events['evs_norm'])
-                event_tmp['ev_loc'] = torch.from_numpy(events['ev_loc'])
-                events_list.append(event_tmp)
-        return events_list
+                ev_loc = events['ev_loc']
+                ev_loc = np.hstack((np.zeros((ev_loc.shape[0], 1)), ev_loc))
+                # ev_loc = np.hstack((i * np.ones((ev_loc.shape[0], 1)), ev_loc))
+                evs_norm_list.append(torch.from_numpy(events['evs_norm']))
+                evs_loc_list.append(torch.from_numpy(ev_loc))
+                evs_stmp.append(events['event_timestamp']+time_stmp)
+        event_tmp['evs_norm'] = evs_norm_list
+        event_tmp['ev_loc'] = evs_loc_list
+        event_tmp['evs_stmp'] = evs_stmp
+        return event_tmp
     
-    def get_events_grid(self, current_idx, idx_list):
-        if not self.use_event:
-            return {}
-
-        event_frames = []
-        event_shape = None
-        voxel_file_count = 0
-
+    def get_events_grid(self, current_idx, idx_list, time_stmp):
+        evs_dict = {
+            'events': [],
+            'events_grid': [],
+            'event_shape': {},
+            'evs_stmp' : [],
+            }
+        total_events_loaded = 0
         for i in idx_list:
-            if i != current_idx:
-                continue
-            event_paths = self.infos[i].get('event_grid_paths', [])
-            for event_path in event_paths:
-                if not os.path.exists(event_path):
-                    continue
-                voxel = np.load(event_path)['voxel'].astype(np.float32)
+            
+            event_paths = self.infos[i]['event_grid_paths']
+            # 根据 TIME_RECEPTIVE_FIELD 限制加载的事件网格数量
+            # 确保总数量不超过 self.receptive_field
+            remaining_slots = self.receptive_field - total_events_loaded
+            if remaining_slots <= 0:
+                break
+            num_events_to_load = min(len(event_paths), remaining_slots)
+            for j in range(num_events_to_load):
+                event_path = event_paths[j]
+                dat = np.load(event_path, allow_pickle=True)
+                voxel = dat['event_grid']
+                curr_time_stmp = dat['event_timestamp']+time_stmp
+                    
+                ### resize image
+                # if self.event_scale != 1:
                 voxel = torch.from_numpy(voxel)
-                target_h, target_w = self.cfg.IMAGE.FINAL_DIM
-                voxel = F.interpolate(
-                    voxel.unsqueeze(0), size=(target_h, target_w), mode='bilinear', align_corners=False
-                ).squeeze(0)
-                event_shape = (target_h, target_w)
-                event_frames.append(voxel)
-                voxel_file_count += 1
-            break
+                voxel = voxel.unsqueeze(0)
+                _, B, H, W = voxel.shape
+                if self.event_scale != 1:
+                    voxel =  F.interpolate(voxel, size=(int(H * self.event_scale), int(W * self.event_scale)))
+                voxel = voxel.squeeze(0).numpy()
+                
+                if self.event_scale != 1:
+                    new_shape = [int(H * self.event_scale), int(W * self.event_scale)]
+                else:
+                    new_shape = [H, W]
+                evs_dict['event_shape'] = new_shape    
+                evs_dict['events_grid'].append(voxel)
+                evs_dict['evs_stmp'].append(curr_time_stmp)
+                total_events_loaded += 1
+        return evs_dict
 
-        if not event_frames:
-            return {'event': None, 'event_shape': event_shape, 'event_voxel_count': 0}
-
-        event_tensor = torch.cat(event_frames, dim=0)  # [C_evt, H, W]
-        event_tensor = event_tensor.unsqueeze(0).unsqueeze(0).contiguous()
-        return {
-            'event': event_tensor.to(torch.float32),
-            'event_shape': event_shape,
-            'event_voxel_count': voxel_file_count,
-        }
-
+    def _event_grid_to_frames(self, event_grid_list):
+        """
+        Convert a list of event voxel grids into a tensor shaped as [S, N, C, H, W]
+        so that downstream components can consume it directly.
+        """
+        if not event_grid_list:
+            return None
+        frame_tensors = []
+        for grid in event_grid_list:
+            if isinstance(grid, np.ndarray):
+                tensor = torch.from_numpy(grid)
+            else:
+                tensor = torch.as_tensor(grid)
+            frame_tensors.append(tensor.float())
+        try:
+            frames = torch.stack(frame_tensors, dim=0)
+        except RuntimeError:
+            return None
+        frames = frames.unsqueeze(1)  # camera dimension -> currently single camera
+        return frames
+    
     def _build_dummy_event(self):
         channels = getattr(self.cfg.MODEL.EVENT, 'IN_CHANNELS', 0)
         if channels <= 0:
@@ -1028,7 +1209,7 @@ class DatasetDSEC(torch.utils.data.Dataset):
                     imgs_dict['images'][cam_name].append(img)
             top_crop = self.augmentation_parameters['crop'][1]
             left_crop = self.augmentation_parameters['crop'][0]
-            img_infos['image_%d_intrinsic' % j] = torch.from_numpy(img_infos['image_%d_intrinsic' % j])
+            img_infos['image_%d_intrinsic' % j] = torch.from_numpy(img_infos['image_%d_intrinsic' % j][:,:3])
             img_infos['image_%d_intrinsic' % j] = update_intrinsics(
                 img_infos['image_%d_intrinsic' % j], top_crop, left_crop,
                 scale_width=self.augmentation_parameters['scale_width'],
@@ -1040,9 +1221,11 @@ class DatasetDSEC(torch.utils.data.Dataset):
             cam_name = 'camera_%s' % str(j)
             # new_ex_param = np.linalg.inv(img_infos['image_%d_extrinsic' % j])
             new_ex_param = self.inverse_T(img_infos['image_%d_extrinsic' % j])
-            imgs_dict['extrinsic'][cam_name] = torch.from_numpy(new_ex_param)
-            imgs_dict['intrinsic'][cam_name] = img_infos['image_%d_intrinsic' % j]
-            imgs_dict['image_shape'][cam_name] = img_infos['image_shape_%d' % j]
+            new_ex_param = torch.from_numpy(new_ex_param).unsqueeze(0).unsqueeze(0)
+            new_in_param = img_infos['image_%d_intrinsic' % j].unsqueeze(0).unsqueeze(0)
+            imgs_dict['extrinsic'] = new_ex_param
+            imgs_dict['intrinsic'] = new_in_param
+            imgs_dict['image_shape'] = img_infos['image_shape_%d' % j]
         return imgs_dict
     
     def prepare_data(self, data_dict):
@@ -1095,47 +1278,169 @@ class DatasetDSEC(torch.utils.data.Dataset):
             data_dict['gt_boxes'] = gt_boxes
             
 
-        gt_labels_3d = []
-        for cat in data_dict['gt_names']:
-            if cat in self.class_names:
-                gt_labels_3d.append(self.class_names.index(cat))
-            else:
-                gt_labels_3d.append(-1)
-        gt_labels_3d = np.array(gt_labels_3d)
+        # 创建gt_labels_3d和gt_bboxes_3d（如果存在gt_boxes）
+        if 'gt_boxes' in data_dict and data_dict.get('gt_boxes') is not None and len(data_dict['gt_boxes']) > 0:
+            gt_labels_3d = []
+            for cat in data_dict['gt_names']:
+                if cat in self.class_names:
+                    gt_labels_3d.append(self.class_names.index(cat))
+                else:
+                    gt_labels_3d.append(-1)
+            
+            gt_labels_3d = np.array(gt_labels_3d, dtype=np.int64)
+            
+            # 转换为torch.Tensor（检测任务需要）
+            gt_labels_3d = torch.from_numpy(gt_labels_3d).long()
 
-        # the nuscenes box center is [0.5, 0.5, 0.5], we change it to be
-        # the same as KITTI (0.5, 0.5, 0)
-        # haotian: this is an important change: from 0.5, 0.5, 0.5 -> 0.5, 0.5, 0
-        gt_bboxes_3d = LiDARInstance3DBoxes(
-            data_dict['gt_boxes'], box_dim=data_dict['gt_boxes'].shape[-1], origin=(0.5, 0.5, 0)
-        ).convert_to(self.box_mode_3d)
+            # the nuscenes box center is [0.5, 0.5, 0.5], we change it to be
+            # the same as KITTI (0.5, 0.5, 0)
+            # haotian: this is an important change: from 0.5, 0.5, 0.5 -> 0.5, 0.5, 0
+            gt_bboxes_3d = LiDARInstance3DBoxes(
+                data_dict['gt_boxes'], box_dim=data_dict['gt_boxes'].shape[-1], origin=(0.5, 0.5, 0)
+            ).convert_to(self.box_mode_3d)
 
-        anns_results = dict(
-            gt_bboxes_3d=gt_bboxes_3d,
-            gt_labels_3d=gt_labels_3d,
-            gt_names=data_dict['gt_names'],
-        )
+            # 将检测标签添加到data_dict中
+            data_dict['gt_bboxes_3d'] = gt_bboxes_3d
+            data_dict['gt_labels_3d'] = gt_labels_3d
+        else:
+            # 创建空的检测标签（没有gt_boxes的情况）
+            # 创建空的LiDARInstance3DBoxes
+            empty_boxes = np.zeros((0, 7), dtype=np.float32)  # 7个属性：x, y, z, dx, dy, dz, yaw
+            gt_bboxes_3d = LiDARInstance3DBoxes(
+                empty_boxes, box_dim=7, origin=(0.5, 0.5, 0)
+            ).convert_to(self.box_mode_3d)
+            gt_labels_3d = torch.tensor([], dtype=torch.long)
+            
+            data_dict['gt_bboxes_3d'] = gt_bboxes_3d
+            data_dict['gt_labels_3d'] = gt_labels_3d
 
-        gt_boxes_lidar_list = []
-        gt_len = data_dict['gt_len']
-        for i in range(len(gt_len)):
-            if i ==0:
-                gt_data = data_dict['gt_boxes'][:gt_len[0]] 
+        # 处理gt_boxes_prosed（仅在存在gt_len时）
+        if 'gt_len' in data_dict and len(data_dict['gt_len']) > 0:
+            gt_boxes_lidar_list = []
+            gt_len = data_dict['gt_len']
+            for i in range(len(gt_len)):
+                if i == 0:
+                    gt_data = data_dict['gt_boxes'][:gt_len[0]] if len(data_dict['gt_boxes']) > 0 else np.zeros((0, data_dict['gt_boxes'].shape[1] if len(data_dict['gt_boxes'].shape) > 1 else 9), dtype=np.float32)
+                else:
+                    gt_data = data_dict['gt_boxes'][gt_len[i-1]:gt_len[i]] if len(data_dict['gt_boxes']) > gt_len[i-1] else np.zeros((0, data_dict['gt_boxes'].shape[1] if len(data_dict['gt_boxes'].shape) > 1 else 9), dtype=np.float32)
                 gt_boxes_lidar_list.append(gt_data)
-            else:
-                gt_data = data_dict['gt_boxes'][gt_len[i-1]:gt_len[i]]
-                gt_boxes_lidar_list.append(gt_data)
-            # if gt_data.shape[0] == 0:
-            #     pdb.set_trace()
-        data_dict['gt_boxes_prosed'] = gt_boxes_lidar_list
+            data_dict['gt_boxes_prosed'] = gt_boxes_lidar_list
+        else:
+            data_dict['gt_boxes_prosed'] = []
         
         return data_dict
 
-    
+    def get_data_flow(self, data_dict, target_idx_list):
+        """
+        将事件数据转换为流式数据格式
+        
+        Args:
+            data_dict: 包含以下键的字典：
+                - 'points': 点云数据
+                - 'events_grid': 事件网格数据列表（来自 get_events_grid）
+                - 'evs_stmp': 事件时间戳列表
+            target_idx_list: 目标索引列表
+        
+        Returns:
+            data_dict: 更新后的字典，包含 'flow_data' 键，删除了 'points', 'evs_stmp', 'events_grid'
+        """
+        temp_flow = []
+        data_split_interval = self.num_speed//(1000//self.event_speed)
+        if data_split_interval <= 0:
+            return data_dict
+        
+        # target_idx_list is a list, use the first element as the base index
+        base_idx = target_idx_list[0] if isinstance(target_idx_list, (list, np.ndarray)) else target_idx_list
+        
+        # 确保使用正确的键名（get_events_grid 返回 'events_grid'）
+        event_grid_key = 'events_grid' if 'events_grid' in data_dict else 'event_grid'
+        if event_grid_key not in data_dict or len(data_dict[event_grid_key]) == 0:
+            return data_dict
+        event_grid = data_dict[event_grid_key]
+        evs_stmp = data_dict['evs_stmp']
+        
+        # 使用实际的事件网格数量，而不是假设的 event_speed//10
+        # 这样可以适配 TIME_RECEPTIVE_FIELD 的限制
+        actual_event_num = len(event_grid)
+        if actual_event_num == 0:
+            return data_dict
+        
+        # 根据实际事件数量计算每个窗口的事件数量
+        target_flow_range = actual_event_num // data_split_interval
+        if target_flow_range <= 0:
+            # 如果实际事件数量太少，每个窗口至少分配1个事件
+            target_flow_range = 1
+        
+        for target_idx in range(data_split_interval):
+            flow_dict = {
+                'flow_events': [],
+                'flow_lidar': [],
+                'events_stmp': [],
+                'lidar_stmp': [],
+            }
+            
+            def get_data(x, y):
+                # 确保访问范围在有效范围内
+                start_idx = max(0, min(x, actual_event_num))
+                end_idx = max(start_idx, min(y, actual_event_num))
+                
+                for event_idx in range(start_idx, end_idx):
+                    # 确保索引有效
+                    if event_idx >= len(event_grid) or event_idx >= len(evs_stmp):
+                        break
+                    
+                    # 在第一个事件时添加初始点云（如果启用lidar）
+                    if event_idx == 0 and self.use_lidar:
+                        if 'points' in data_dict:
+                            flow_dict['flow_lidar'].append(data_dict['points'])
+                            flow_dict['lidar_stmp'].append(self.infos[base_idx]['time_stamp'])
+                    # 如果事件数量足够多（>=10），在第10个事件时添加下一个时间步的点云
+                    # 否则在最后一个事件时添加
+                    elif event_idx == min(10, actual_event_num - 1) and actual_event_num > 1 and self.use_lidar:
+                        # 确保 base_idx+1 有效
+                        if base_idx + 1 < len(self.infos):
+                            _, points = self.get_infos_and_points([base_idx+1])
+                            flow_dict['flow_lidar'].append(points[0])
+                            flow_dict['lidar_stmp'].append(self.infos[base_idx+1]['time_stamp'])
+                    
+                    flow_dict['flow_events'].append(event_grid[event_idx])
+                    flow_dict['events_stmp'].append(evs_stmp[event_idx])
+            
+            # 计算当前窗口的起始和结束索引
+            start_range = target_idx * target_flow_range
+            end_range = (target_idx + 1) * target_flow_range
+            
+            # 处理当前窗口
+            get_data(start_range, end_range)
+            
+            # 如果是最后一个窗口，处理剩余的事件
+            if target_idx + 1 == data_split_interval and end_range < actual_event_num:
+                get_data(end_range, actual_event_num)
+            
+            # 确保至少有一些数据
+            if len(flow_dict['flow_events']) > 0:
+                flow_dict['curr_time_stmp'] = flow_dict['events_stmp'][-1]
+                temp_flow.append(flow_dict)
+        
+        # 如果没有任何有效的流数据，返回原始字典
+        if len(temp_flow) == 0:
+            return data_dict
+        
+        data_dict['flow_data'] = temp_flow
+        # 只在points存在时删除（当USE_LIDAR=False时，points可能不存在）
+        if 'points' in data_dict:
+            del data_dict['points']
+            del data_dict['evs_stmp']
+        if event_grid_key in data_dict:
+            del data_dict[event_grid_key]
+        return data_dict
 
     def __getitem__(self, index):
+        index = self.dataloader_index[index]
         current_info = copy.deepcopy(self.infos[index])
-        target_idx_list = self.get_sweep_idxs(current_info, current_idx=index)
+        # 获取时序帧索引：从 -(receptive_field-1) 到 0（当前帧）
+        sweep_count = [-(self.receptive_field - 1), 0]
+        target_idx_list = DatasetDSEC.get_sweep_idxs(current_info, sweep_count=sweep_count, current_idx=index)
         
         input_dict = {
             'frame_id': current_info['sample_idx'],
@@ -1148,20 +1453,135 @@ class DatasetDSEC(torch.utils.data.Dataset):
             target_infos, points = self.get_infos_and_points(target_idx_list)
             points = points[0]
             input_dict['points'] = points
+            # 调试信息：确认 points 被加载
+            if not hasattr(self, '_points_loaded_debug'):
+                print(f"[DSECData] use_lidar={self.use_lidar}, points loaded: shape={points.shape if hasattr(points, 'shape') else type(points)}")
+                self._points_loaded_debug = True
+        else:
+            # 调试信息：确认 use_lidar 状态
+            if not hasattr(self, '_lidar_disabled_debug'):
+                print(f"[DSECData] use_lidar={self.use_lidar}, skipping points loading")
+                self._lidar_disabled_debug = True
         
+        # 生成分割标签（时序）
+        segmentation_list = []
+        instance_list = []
+        instance_map = {}
+        
+        for i, target_idx in enumerate(target_idx_list):
+            if target_idx < len(self.infos):
+                frame_info = self.infos[target_idx]
+                # 为每一帧生成分割标签
+                seg, inst, instance_map = self.get_label(frame_info, instance_map, in_pred=(i >= self.receptive_field))
+                segmentation_list.append(seg)
+                instance_list.append(inst)
+            else:
+                # 如果索引超出范围，使用空标签
+                empty_seg = torch.zeros((1, 1, self.bev_dimension[0], self.bev_dimension[1]), dtype=torch.long)
+                empty_inst = torch.zeros((1, self.bev_dimension[0], self.bev_dimension[1]), dtype=torch.long)
+                segmentation_list.append(empty_seg)
+                instance_list.append(empty_inst)
+        
+        # 堆叠时序标签
+        if len(segmentation_list) > 0:
+            input_dict['segmentation'] = torch.cat(segmentation_list, dim=0)  # (T, 1, H, W)
+            input_dict['instance'] = torch.cat(instance_list, dim=0)  # (T, H, W)
+        
+        # 生成future_egomotion（时序）
+        future_egomotion_list = []
+        for i, target_idx in enumerate(target_idx_list):
+            if i < len(target_idx_list) - 1 and target_idx < len(self.infos) - 1:
+                # 计算当前帧到下一帧的ego motion
+                # 公式：T_{t+1}^{-1} * T_t（与NuScenes格式一致）
+                current_pose = self.infos[target_idx]['pose']
+                next_pose = self.infos[target_idx + 1]['pose']
+                next_pose_inv = np.linalg.inv(next_pose)
+                future_egomotion = next_pose_inv @ current_pose
+                future_egomotion[3, :3] = 0.0
+                future_egomotion[3, 3] = 1.0
+                # 转换为6DoF向量
+                future_egomotion_vec = mat2pose_vec(torch.from_numpy(future_egomotion).float())
+                future_egomotion_list.append(future_egomotion_vec.unsqueeze(0))
+            else:
+                # 最后一帧，使用单位变换
+                future_egomotion_list.append(torch.zeros(1, 6))
+        
+        if len(future_egomotion_list) > 0:
+            input_dict['future_egomotion'] = torch.cat(future_egomotion_list, dim=0)  # (T, 6)
+        
+        # 生成camera_timestamp和target_timestamp
+        camera_timestamp_list = []
+        for target_idx in target_idx_list:
+            if target_idx < len(self.infos):
+                timestamp = self.infos[target_idx].get('time_stamp', 0)
+                camera_timestamp_list.append(timestamp)
+            else:
+                camera_timestamp_list.append(0)
+        
+        if len(camera_timestamp_list) > 0:
+            camera_timestamps = np.array(camera_timestamp_list, dtype=np.float64)
+            # 归一化：相对于第一帧的时间戳（转换为秒）
+            camera_timestamps = (camera_timestamps - camera_timestamps[0]) / 1e6
+            input_dict['camera_timestamp'] = torch.from_numpy(camera_timestamps).float()  # (T,)
+        
+        # target_timestamp：未来预测的目标时间（秒）
+        n_future = getattr(self.cfg, 'N_FUTURE_FRAMES', 0)
+        if n_future > 0:
+            target_time = n_future * 0.1  # 假设每帧0.1秒
+        else:
+            target_time = 0.0
+        input_dict['target_timestamp'] = torch.tensor([target_time], dtype=torch.float32)
+        
+        # 添加训练所需的其他字段（如果不存在）
+        if 'command' not in input_dict:
+            # 默认命令：FORWARD
+            input_dict['command'] = 'FORWARD'
+        if 'sample_trajectory' not in input_dict:
+            # 默认轨迹：空轨迹
+            input_dict['sample_trajectory'] = torch.zeros(1, 1, 3)
+        if 'target_point' not in input_dict:
+            # 默认目标点
+            input_dict['target_point'] = torch.tensor([0., 0.])
+        
+        if self.use_event:
+            # 加载事件数据，与是否使用图像无关
+            ev_dict = self.get_events(index, target_idx_list, time_stmp=current_info['time_stamp'])
+            ev_dict = self.get_events_grid(index, target_idx_list, time_stmp=current_info['time_stamp'])
+            input_dict.update(ev_dict)
+            event_frames = self._event_grid_to_frames(ev_dict.get('events_grid', []))
+            if event_frames is not None:
+                input_dict['event'] = {'frames': event_frames}
+                input_dict['event_voxel_count'] = len(ev_dict.get('events_grid', []))
+            
         # breakpoint()
         if self.use_image:
+            # TODO: add the corresponding image here
             img_dict = self.get_images_and_params(index, target_idx_list)
             input_dict.update(img_dict)
-
-        if self.use_event:
-            ev_grid_dict = self.get_events_grid(index, target_idx_list)
-            event_tensor = ev_grid_dict.get('event')
-            voxel_file_count = ev_grid_dict.get('event_voxel_count', 0)
-            if event_tensor is None:
-                event_tensor, voxel_file_count = self._build_dummy_event()
-            input_dict['event'] = event_tensor
-            input_dict['event_voxel_count'] = voxel_file_count
+        else:
+            # 即使不使用图像，也需要提供intrinsics和extrinsics（事件分支需要）
+            # 创建默认的相机参数
+            num_cameras = len(self.cfg.IMAGE.NAMES)
+            num_frames = len(target_idx_list)
+            default_intrinsics = torch.eye(3).unsqueeze(0).unsqueeze(0).repeat(num_frames, num_cameras, 1, 1)
+            default_extrinsics = torch.eye(4).unsqueeze(0).unsqueeze(0).repeat(num_frames, num_cameras, 1, 1)
+            input_dict['intrinsics'] = default_intrinsics
+            input_dict['extrinsics'] = default_extrinsics
+        
+        # 如果需要流式数据格式，调用 get_data_flow（不依赖于 use_image）
+        if self.use_flow_data:
+            if 'events_grid' in input_dict and 'evs_stmp' in input_dict:
+                if len(input_dict['events_grid']) > 0 and len(input_dict['evs_stmp']) > 0:
+                    input_dict = self.get_data_flow(input_dict, target_idx_list)
+            else:
+                # 如果 events_grid 不存在，尝试加载事件数据
+                if self.use_event:
+                    ev_dict = self.get_events(index, target_idx_list, time_stmp=current_info['time_stamp'])
+                    ev_dict = self.get_events_grid(index, target_idx_list, time_stmp=current_info['time_stamp'])
+                    input_dict.update(ev_dict)
+                    if 'events_grid' in input_dict and 'evs_stmp' in input_dict:
+                        if len(input_dict['events_grid']) > 0 and len(input_dict['evs_stmp']) > 0:
+                            input_dict = self.get_data_flow(input_dict, target_idx_list)
             
         if 'seq_annos' in current_info:
 
@@ -1196,6 +1616,52 @@ class DatasetDSEC(torch.utils.data.Dataset):
                 'gt_obj_ids': gt_obj_ids
             })
         data_dict = self.prepare_data(data_dict=copy.deepcopy(input_dict))
+        
+        # 构建检测任务的metas（如果启用检测）
+        if getattr(self.cfg, 'DETECTION', None) and getattr(self.cfg.DETECTION, 'ENABLED', False):
+            # 计算BEV网格参数
+            bev_h = int((self.cfg.LIFT.X_BOUND[1] - self.cfg.LIFT.X_BOUND[0]) / self.cfg.LIFT.X_BOUND[2])
+            bev_w = int((self.cfg.LIFT.Y_BOUND[1] - self.cfg.LIFT.Y_BOUND[0]) / self.cfg.LIFT.Y_BOUND[2])
+            grid_size = [bev_w, bev_h]
+            
+            voxel_size = [self.cfg.LIFT.X_BOUND[2], self.cfg.LIFT.Y_BOUND[2], self.cfg.LIFT.Z_BOUND[2]]
+            pc_range = [
+                self.cfg.LIFT.X_BOUND[0], self.cfg.LIFT.Y_BOUND[0], self.cfg.LIFT.Z_BOUND[0],
+                self.cfg.LIFT.X_BOUND[1], self.cfg.LIFT.Y_BOUND[1], self.cfg.LIFT.Z_BOUND[1]
+            ]
+            
+            meta = {
+                'grid_size': grid_size,
+                'out_size_factor': self.cfg.DETECTION.OUT_SIZE_FACTOR,
+                'pc_range': pc_range,
+                'voxel_size': voxel_size,
+                'dataset': self.cfg.DETECTION.DATASET,
+                'box_type_3d': LiDARInstance3DBoxes,  # 提供box类型以便解码/评估
+            }
+            data_dict['metas'] = [meta]  # list of dict，每个样本一个meta
+        
+        # 输出单个样本的数据尺寸（仅在第一次或偶尔输出，避免过多日志）
+        if not hasattr(self, '_data_size_logged') or self._data_size_logged < 1:
+            print("[Dataset] Sample data sizes:")
+            if 'event' in data_dict and isinstance(data_dict['event'], dict):
+                if 'frames' in data_dict['event']:
+                    event_frames = data_dict['event']['frames']
+                    if torch.is_tensor(event_frames):
+                        print(f"  event.frames: {event_frames.shape}")
+            if 'images' in data_dict:
+                images = data_dict['images']
+                if isinstance(images, dict):
+                    for cam_name, img_list in images.items():
+                        if isinstance(img_list, (list, tuple)) and len(img_list) > 0:
+                            if torch.is_tensor(img_list[0]):
+                                print(f"  images[{cam_name}]: list of {len(img_list)} tensors, each {img_list[0].shape}")
+                            elif isinstance(img_list[0], np.ndarray):
+                                print(f"  images[{cam_name}]: list of {len(img_list)} arrays, each {img_list[0].shape}")
+                elif torch.is_tensor(images):
+                    print(f"  images: {images.shape}")
+            if not hasattr(self, '_data_size_logged'):
+                self._data_size_logged = 0
+            self._data_size_logged += 1
         
         return data_dict
 

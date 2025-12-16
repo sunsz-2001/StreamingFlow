@@ -88,7 +88,7 @@ class Decoder(nn.Module):
                 nn.Conv2d(shared_out_channels, 1, kernel_size=1, padding=0),
             )
 
-    def forward(self, x):
+    def forward(self, x, metas=None):
         b, s, c, h, w = x.shape
         x = x.view(b * s, c, h, w)
         # (H, W)

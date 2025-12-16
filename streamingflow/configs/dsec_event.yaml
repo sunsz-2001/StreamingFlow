@@ -1,11 +1,15 @@
-TAG: 'dsec_event_eval'
+TAG: 'dsec_event_eval'  # 训练日志和检查点保存目录名
 
 GPUS: [0]
-BATCHSIZE: 10
-PRECISION: 32
-EPOCHS: 1
+BATCHSIZE: 16
+PRECISION: 32  # 16 或 32，混合精度训练使用 16
+EPOCHS: 100  # 训练轮数
 
-N_WORKERS: 4
+N_WORKERS: 4  # 数据加载器工作进程数
+# LOG_DIR: 'logs'  # 日志保存目录（默认：'logs'）
+# GRAD_NORM_CLIP: 5  # 梯度裁剪阈值（默认：5）
+# LOGGING_INTERVAL: 500  # 日志记录间隔（默认：500）
+# VIS_INTERVAL: 5000  # 可视化间隔（默认：5000）
 
 DATASET:
   NAME: 'dsec'
@@ -17,7 +21,7 @@ DATASET:
   EVENT_CAMERAS: ['camera_0']
   VERSION: 'trainval'
 
-TIME_RECEPTIVE_FIELD: 2
+TIME_RECEPTIVE_FIELD: 1
 N_FUTURE_FRAMES: 0
 
 IMAGE:
@@ -31,7 +35,10 @@ IMAGE:
 LIFT:
   GT_DEPTH: False
   GEN_DEPTH: False
-  D_BOUND: [2.0, 50.0, 1.0]
+  X_BOUND: [-50.0, 50.0, 0.5]  # Forward direction [min, max, resolution]
+  Y_BOUND: [-50.0, 50.0, 0.5]  # Side direction [min, max, resolution]
+  Z_BOUND: [-10.0, 10.0, 20.0]  # Height [min, max, resolution]
+  D_BOUND: [2.0, 50.0, 1.0]  # Depth [min, max, resolution]
 
 MODEL:
   MODALITY:
@@ -47,7 +54,7 @@ MODEL:
   EVENT:
     BACKBONE: 'presnet50'
     BINS: 5
-    IN_CHANNELS: 50  # 自动使用 2 * BINS
+    IN_CHANNELS: 5  # 直接使用5个通道，不进行时间维度堆叠
     HIDDEN_DIM: 256
     NUM_ENCODER_LAYERS: 1
     NUM_HEADS: 8
@@ -60,9 +67,12 @@ MODEL:
     DEPTH_BINS: 80
     DEPTH_HEAD_CHANNELS: 128
     RESIDUAL_INIT: 0.0
+    INPUT_SIZE: [240, 320]  # Event 输入分辨率 [H, W]
+    DOWNSAMPLE: 8  # Event encoder 下采样率（EventEncoderEvRT 固定为 8）
   TEMPORAL_MODEL:
     NAME: 'identity'
     INPUT_EGOPOSE: False
+    START_OUT_CHANNELS: 64  # 输出通道数，需与ENCODER.OUT_CHANNELS匹配
 
 SEMANTIC_SEG:
   PEDESTRIAN:
@@ -79,8 +89,23 @@ INSTANCE_FLOW:
 PLANNING:
   ENABLED: False
 
+DETECTION:
+  ENABLED: True
+  NUM_CLASSES: 3  # Vehicle, Cyclist, Pedestrian三个类别
+  NUM_PROPOSALS: 128
+  HIDDEN_CHANNEL: 128
+  NUM_DECODER_LAYERS: 3
+  NUM_HEADS: 8
+  NMS_KERNEL_SIZE: 1
+  FFN_CHANNEL: 256
+  DROPOUT: 0.1
+  AUXILIARY: True
+  OUT_SIZE_FACTOR: 8
+  DATASET: 'dsec'
+
 OPTIMIZER:
-  LR: 2e-4
+  LR: 1e-4
+  WEIGHT_DECAY: 1e-7
 
 PRETRAINED:
   LOAD_WEIGHTS: False

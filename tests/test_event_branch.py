@@ -1,32 +1,155 @@
 """
 事件分支推理自检脚本。
 
-三种使用方式：
-1. **真实数据推理**（默认）：
-   ```bash
-   python tests/test_event_branch.py --config-file configs/dsec_event.yaml --split val --num-batches 2
-   ```
-   - 需提前准备好数据集（例如 DSEC）并在配置中设定 `DATASET.NAME`、`DATAROOT`、`MODEL.MODALITY.*` 等。
-   - 仅做前向推理，不更新参数。
+========================================
+快速运行指令
+========================================
 
-2. **合成数据快速自检**：
+1. **真实数据推理**（推荐，快速验证）：
+   ```bash
+   python tests/test_event_branch.py \
+     --config-file streamingflow/configs/dsec_event.yaml \
+     --split val \
+     --num-batches 1 \
+     --batch-size 1
+   ```
+
+2. **合成数据快速自检**（无需真实数据）：
    ```bash
    python tests/test_event_branch.py --synthetic
    ```
-   - 不依赖实际数据，用随机事件流验证 EvRT 编码 → LSS → BEV 全链路。
 
-3. **速度基准测试**（新增）：
+3. **速度基准测试**（完整性能测试）：
    ```bash
-   python tests/test_event_branch.py --config-file configs/dsec_event.yaml --benchmark --num-batches 100 --num-warmup 10 --save-benchmark results.csv
+   python tests/test_event_branch.py \
+     --config-file streamingflow/configs/dsec_event.yaml \
+     --benchmark \
+     --num-batches 100 \
+     --num-warmup 10 \
+     --save-benchmark results.csv
    ```
+
+4. **仅测试编码器速度**（编码器专项测试）：
+   ```bash
+   python tests/test_event_branch.py \
+     --config-file streamingflow/configs/dsec_event.yaml \
+     --benchmark \
+     --benchmark-encoder-only \
+     --num-batches 50
+   ```
+
+5. **流式数据格式测试**：
+   ```bash
+   python tests/test_event_branch.py \
+     --config-file streamingflow/configs/dsec_event.yaml \
+     --split val \
+     --num-batches 2 \
+     --test-flow-data
+   ```
+
+6. **完整NODE测试**（包含未来预测）：
+   ```bash
+   python tests/test_event_branch.py \
+     --config-file streamingflow/configs/dsec_event_with_node.yaml \
+     --split val \
+     --num-batches 1 \
+     --batch-size 1
+   ```
+   注意：需要配置文件中 `N_FUTURE_FRAMES > 0` 才能启用NODE模块。
+
+========================================
+详细使用说明
+========================================
+
+1. **真实数据推理**（默认）：
+   - 需提前准备好数据集（例如 DSEC）并在配置中设定 `DATASET.NAME`、`DATAROOT`、`MODEL.MODALITY.*` 等。
+   - 仅做前向推理，不更新参数。
+   - 验证 100Hz 频率配置、输入/输出尺寸、事件编码器和 BEV 输出信息。
+
+2. **合成数据快速自检**：
+   - 不依赖实际数据，用随机事件流验证 EvRT 编码 → LSS → BEV 全链路。
+   - 适合快速验证模型结构是否正确。
+
+3. **速度基准测试**：
    - 测试数据加载速度、预处理速度和模型推理速度。
    - 输出详细的性能统计（平均值、中位数、标准差、百分位数等）。
    - 可选保存结果为 CSV 文件，方便后续分析。
    - 使用 CUDA Event 进行精确的 GPU 时间测量。
 
-运行前请确认：
-    * 已 `pip install -e ./evrt-detr`（事件编码依赖）。
-    * 其它依赖（efficientnet_pytorch 等）就绪。
+4. **编码器专项测试**：
+   - 只测试 Event 编码器到 BEV 投影前的速度。
+   - 不包括 BEV 投影、时序模型、解码器。
+   - 用于分析编码器性能瓶颈。
+
+5. **流式数据格式测试**：
+   - 测试 `get_data_flow` 方法生成的流式数据格式。
+   - 需要在配置文件中设置 `DATASET.USE_FLOW_DATA=True` 以启用流式数据生成。
+   - 输出流式数据的详细结构信息，包括每个时间窗口的事件和 LiDAR 数据。
+
+6. **完整NODE测试**：
+   - 测试包含 Neural ODE (NODE) 未来预测模块的完整流程。
+   - 需要在配置文件中设置 `N_FUTURE_FRAMES > 0`（例如 6 或 10）。
+   - 测试流程包括：
+     * Event编码器（EvRT）
+     * BEV投影（LSS）
+     * 时序模型（temporal_model）
+     * **NODE未来预测模块**（FuturePredictionODE）
+     * Decoder
+   - 验证输出序列长度是否正确（past frames + future frames）。
+
+========================================
+命令行参数说明
+========================================
+
+必需参数：
+  --config-file PATH      配置文件路径（例如：streamingflow/configs/dsec_event.yaml）
+
+可选参数：
+  --split {train,val}     数据集划分（默认：train）
+  --num-batches N        推理的 batch 数量（默认：1）
+  --batch-size N         DataLoader 的 batch size（默认：1）
+  --num-workers N        DataLoader 的 worker 数（默认：0）
+  --device {auto,cuda,cpu}  推理设备（默认：auto）
+
+模式选择：
+  --synthetic            使用合成数据模式（不依赖真实数据集）
+  --benchmark            启用速度基准测试模式
+  --benchmark-encoder-only  只测试编码器速度（需配合 --benchmark）
+  --test-flow-data       测试流式数据格式
+
+基准测试参数：
+  --num-warmup N         预热次数（默认：5）
+  --save-benchmark PATH  保存基准测试结果为 CSV 文件
+
+========================================
+流式数据格式说明
+========================================
+
+`get_data_flow` 将事件序列分割为多个时间窗口，每个窗口包含：
+  - `flow_events`: 该窗口的事件数据列表
+  - `flow_lidar`: 对应的 LiDAR 点云数据列表
+  - `events_stmp`: 事件时间戳列表
+  - `lidar_stmp`: LiDAR 时间戳列表
+  - `curr_time_stmp`: 当前时间戳
+
+返回的 `data_dict['flow_data']` 是一个列表，每个元素代表一个时间窗口。
+
+========================================
+运行前准备
+========================================
+
+1. 安装事件编码依赖：
+   ```bash
+   pip install -e ./evrt-detr
+   ```
+
+2. 确保其它依赖就绪（efficientnet_pytorch 等）
+
+3. 配置数据集路径和参数（在配置文件中）：
+   - `DATASET.NAME`: 数据集名称
+   - `DATAROOT`: 数据集根目录
+   - `MODEL.MODALITY.*`: 模态配置
+   - `DATASET.USE_FLOW_DATA`: 是否启用流式数据（可选）
 """
 
 import sys
@@ -67,13 +190,26 @@ def move_to_device(value, device):
     return value
 
 
+def _get_tensor_batch_size(value):
+    """从张量或字典中提取 batch 大小"""
+    if torch.is_tensor(value):
+        return value.shape[0]
+    if isinstance(value, dict):
+        # 支持 event 字典格式 {'frames': tensor}
+        if 'frames' in value and torch.is_tensor(value['frames']):
+            return value['frames'].shape[0]
+    return None
+
+
 def infer_batch_size(tensors):
+    """推断 batch 大小，支持张量和字典格式"""
     for key in [
         'image', 'event', 'intrinsics', 'future_egomotion', 'points', 'padded_voxel_points'
     ]:
         value = tensors.get(key)
-        if torch.is_tensor(value):
-            return value.shape[0]
+        batch_size = _get_tensor_batch_size(value)
+        if batch_size is not None:
+            return batch_size
     return 1
 
 
@@ -92,15 +228,46 @@ def prepare_model_inputs(batch, device, cfg):
     ]
     prepared = {k: move_to_device(batch.get(k), device) for k in keys}
 
+    # 先处理 event 数据以确定正确的 batch_size
+    event = prepared.get("event")
     batch_size = infer_batch_size(prepared)
+    
+    # 如果 event 是字典格式，从中提取实际的 batch_size
+    if event is not None:
+        if isinstance(event, dict) and 'frames' in event:
+            event_frames = event['frames']
+            if torch.is_tensor(event_frames):
+                actual_batch_size = event_frames.shape[0]
+                if actual_batch_size != batch_size:
+                    batch_size = actual_batch_size
+        elif torch.is_tensor(event):
+            actual_batch_size = event.shape[0]
+            if actual_batch_size != batch_size:
+                batch_size = actual_batch_size
+        elif isinstance(event, (list, tuple)):
+            raise ValueError("事件输入需要整理为张量或支持的 dict 结构。")
 
     seq = getattr(cfg, 'TIME_RECEPTIVE_FIELD', 1)
 
+    # 使用正确的 batch_size 创建所有默认值
     if prepared.get("future_egomotion") is None:
         prepared["future_egomotion"] = torch.zeros(batch_size, seq, 6, device=device)
 
     if prepared.get("target_timestamp") is None:
-        prepared["target_timestamp"] = torch.zeros(batch_size, seq, device=device)
+        n_future = getattr(cfg, 'N_FUTURE_FRAMES', 0)
+        if n_future > 0:
+            target_time = n_future * 0.1
+            prepared["target_timestamp"] = torch.full((batch_size,), target_time, device=device)
+        else:
+            prepared["target_timestamp"] = torch.zeros(batch_size, device=device)
+
+    if prepared.get("camera_timestamp") is None:
+        timestamps = torch.arange(-seq + 1, 1, dtype=torch.float32, device=device) * 0.1
+        prepared["camera_timestamp"] = timestamps.unsqueeze(0).repeat(batch_size, 1)
+    
+    if prepared.get("lidar_timestamp") is None:
+        timestamps = torch.arange(-seq + 1, 1, dtype=torch.float32, device=device) * 0.1
+        prepared["lidar_timestamp"] = timestamps.unsqueeze(0).repeat(batch_size, 1)
 
     if prepared.get("intrinsics") is None:
         prepared["intrinsics"] = torch.eye(3, device=device).view(1, 1, 1, 3, 3).repeat(batch_size, seq, 1, 1, 1)
@@ -112,17 +279,32 @@ def prepare_model_inputs(batch, device, cfg):
         h, w = cfg.IMAGE.FINAL_DIM
         prepared["image"] = torch.zeros(batch_size, seq, len(cfg.IMAGE.NAMES), 3, h, w, device=device)
 
-    if prepared.get("event") is None and cfg.MODEL.MODALITY.USE_EVENT:
+    # 处理 event 数据的序列长度
+    if event is None and cfg.MODEL.MODALITY.USE_EVENT:
         channels = getattr(cfg.MODEL.EVENT, 'IN_CHANNELS', 0)
         if channels <= 0:
             channels = 2 * getattr(cfg.MODEL.EVENT, 'BINS', 10)
         h, w = cfg.IMAGE.FINAL_DIM
         prepared["event"] = torch.zeros(batch_size, seq, len(cfg.IMAGE.NAMES), channels, h, w, device=device)
-    else:
-        event = prepared.get("event")
-        if isinstance(event, list) or isinstance(event, tuple):
-            raise ValueError("事件输入需要整理为张量或支持的 dict 结构。")
-        if torch.is_tensor(event):
+    elif event is not None:
+        if isinstance(event, dict) and 'frames' in event:
+            # 字典格式：处理序列长度
+            event_frames = event['frames']
+            if torch.is_tensor(event_frames):
+                cur_seq = event_frames.shape[1]
+                if cur_seq < seq:
+                    pad = torch.zeros(
+                        (batch_size, seq - cur_seq) + tuple(event_frames.shape[2:]),
+                        device=device,
+                        dtype=event_frames.dtype,
+                    )
+                    prepared["event"] = {'frames': torch.cat([event_frames, pad], dim=1)}
+                elif cur_seq > seq:
+                    prepared["event"] = {'frames': event_frames[:, :seq]}
+                else:
+                    prepared["event"] = event
+        elif torch.is_tensor(event):
+            # 张量格式：处理序列长度
             cur_seq = event.shape[1]
             if cur_seq < seq:
                 pad = torch.zeros(
@@ -133,7 +315,26 @@ def prepare_model_inputs(batch, device, cfg):
                 prepared["event"] = torch.cat([event, pad], dim=1)
             elif cur_seq > seq:
                 prepared["event"] = event[:, :seq]
+    
     return prepared
+
+
+def log_stage_shape(stage, payload):
+    prefix = f"[Event][{stage}]"
+    if torch.is_tensor(payload):
+        print(f"{prefix} Tensor shape={tuple(payload.shape)}, dtype={payload.dtype}, device={payload.device}")
+    elif isinstance(payload, dict):
+        keys = list(payload.keys())
+        print(f"{prefix} Dict keys={keys}")
+    elif isinstance(payload, (list, tuple)):
+        length = len(payload)
+        exemplar = payload[0] if length > 0 else None
+        if torch.is_tensor(exemplar):
+            print(f"{prefix} {type(payload).__name__} len={length}, first shape={tuple(exemplar.shape)}")
+        else:
+            print(f"{prefix} {type(payload).__name__} len={length}")
+    else:
+        print(f"{prefix} {type(payload)}")
 
 
 def describe_outputs(name, obj):
@@ -157,6 +358,23 @@ def run_dataset_inference(cfg, args):
 
     print(f"[Info] 使用设备: {device}")
     print(f"[Info] DATASET.NAME={cfg.DATASET.NAME}, BATCHSIZE={cfg.BATCHSIZE}, N_WORKERS={cfg.N_WORKERS}")
+
+    # 检查100Hz频率配置
+    from streamingflow.datas.DSECData import DatasetDSEC
+    if cfg.DATASET.NAME == 'dsec':
+        # 创建临时数据集实例以检查配置
+        temp_dataset = DatasetDSEC(cfg, cfg, is_train=(args.split == "train"))
+        event_speed = temp_dataset.event_speed
+        num_speed = temp_dataset.num_speed
+        print(f"\n[100Hz 频率验证]")
+        print(f"  event_speed: {event_speed} Hz")
+        print(f"  num_speed: {num_speed}")
+        print(f"  data_split_interval: {num_speed//(1000//event_speed)}")
+        print(f"  event_num per window: {event_speed//10}")
+        if event_speed != 100:
+            print(f"  [警告] event_speed 不是 100Hz，当前为 {event_speed}Hz")
+        else:
+            print(f"  [✓] event_speed 配置正确: 100Hz")
 
     trainloader, valloader = prepare_dataloaders(cfg)
     loader = trainloader if args.split == "train" else valloader
@@ -189,7 +407,13 @@ def run_dataset_inference(cfg, args):
         else:
             voxel_count_value = int(raw_voxel_count)
 
+        raw_event_payload = batch.get("event")
+        log_stage_shape("Stage0-raw-loader", raw_event_payload)
+
         inputs = prepare_model_inputs(batch, device, cfg)
+
+        prepared_event_payload = inputs.get("event")
+        log_stage_shape("Stage1-after-prepare_inputs", prepared_event_payload)
 
         if cfg.MODEL.MODALITY.USE_EVENT and inputs.get("event") is None:
             raise RuntimeError("当前 batch 缺少事件张量，无法测试事件分支。")
@@ -199,6 +423,9 @@ def run_dataset_inference(cfg, args):
         event_bev_inspect = None
         encoder_feats_shape = None
         voxel_file_count = 0
+        frames = None
+        event_input = None
+        channels = 0
         if cfg.MODEL.MODALITY.USE_EVENT:
             with torch.no_grad():
                 modality_probe = model.calculate_birds_eye_view_features(
@@ -215,17 +442,32 @@ def run_dataset_inference(cfg, args):
 
             # 直接跑一次 encoder forward 以检查输出形状
             frames = model._prepare_event_frames(inputs.get("event"), cfg.TIME_RECEPTIVE_FIELD, device=device)
+            log_stage_shape("Stage2-after-frame-normalize", frames)
             frames = frames[:, :cfg.TIME_RECEPTIVE_FIELD]
             b, s, n, c, h, w = frames.shape
-            packed = frames.view(b, s * n, c, h, w)
+            
+            # 获取期望的通道数（直接使用，不再stacking）
+            expected_channels = getattr(cfg.MODEL.EVENT, "IN_CHANNELS", 0)
+            if expected_channels <= 0:
+                bins = getattr(cfg.MODEL.EVENT, "BINS", 10)
+                expected_channels = 2 * bins
+            if c != expected_channels:
+                raise ValueError(f"事件帧通道数C={c}与期望通道数{expected_channels}不匹配。")
+            
+            # 直接reshape: [B, S, N, C, H, W] -> [B*S*N, C, H, W]
+            event_reshaped = frames.view(b * s * n, c, h, w)
+            
             with torch.no_grad():
-                encoder_feats, _ = model.event_encoder_forward(packed)
+                encoder_feats, _ = model.event_encoder_forward(event_reshaped)
             encoder_feats_shape = tuple(encoder_feats.shape)
-            print(f"[Event] Input frames shape: {tuple(frames.shape)}")
+            print(f"[Event][Stage3-after-encoder] Reshaped input shape: {tuple(event_reshaped.shape)}")
+            print(f"[Event][Stage3-after-encoder] Encoder output shape: {encoder_feats_shape}")
 
             event_input = inputs.get("event")
             if torch.is_tensor(event_input):
                 channels = event_input.shape[3]
+            elif isinstance(event_input, dict) and 'frames' in event_input and torch.is_tensor(event_input['frames']):
+                channels = event_input['frames'].shape[3]
             else:
                 channels = 0
             voxel_file_count = voxel_count_value
@@ -244,15 +486,135 @@ def run_dataset_inference(cfg, args):
                 event=inputs.get("event"),
             )
 
+        if isinstance(outputs, dict):
+            for key in ["segmentation", "pedestrian", "hdmap", "instance_center", "instance_offset"]:
+                tensor = outputs.get(key)
+                if torch.is_tensor(tensor):
+                    print(f"[Model][Stage4-final-output] {key}: {tuple(tensor.shape)}")
+
+        # Check if NODE is enabled
+        n_future = getattr(cfg, 'N_FUTURE_FRAMES', 0)
+        if n_future > 0:
+            print(f"\n[Info] NODE 已启用: N_FUTURE_FRAMES={n_future}")
+            if inputs.get("target_timestamp") is not None:
+                target_ts = inputs.get("target_timestamp")
+                if torch.is_tensor(target_ts):
+                    print(f"[NODE] target_timestamp shape: {tuple(target_ts.shape)}, values: {target_ts.cpu().numpy()}")
+            # Check output sequence length (should include past + future frames)
+            if isinstance(outputs, dict) and "segmentation" in outputs:
+                seg_shape = outputs["segmentation"].shape
+                expected_seq = cfg.TIME_RECEPTIVE_FIELD + n_future
+                if len(seg_shape) >= 2 and seg_shape[1] == expected_seq:
+                    print(f"[✓] NODE 输出序列长度正确: {seg_shape[1]} (期望: {expected_seq} = {cfg.TIME_RECEPTIVE_FIELD} past + {n_future} future)")
+                else:
+                    print(f"[!] NODE 输出序列长度: {seg_shape[1] if len(seg_shape) >= 2 else 'N/A'} (期望: {expected_seq})")
+
         print(f"\n[Info] Batch {step} 推理完成，输出结构：")
         describe_outputs("output", outputs)
 
         if event_bev_inspect is not None:
             print(f"[Event] BEV shape: {tuple(event_bev_inspect.shape)}")
-        if encoder_feats_shape is not None:
+            # 验证BEV输出尺寸
+            # BEV输出尺寸由bev_dimension决定，格式为 (batch, s, n_cameras, channels, H, W)
+            # 但实际输出可能是 (batch*s, n_cameras, channels, H, W) 或 (batch, s, channels, H, W)
+            actual_bev_shape = tuple(event_bev_inspect.shape)
+            expected_channels = model.encoder_out_channels
+            expected_h = model.bev_dimension[0].item()
+            expected_w = model.bev_dimension[1].item()
+            
+            # 检查关键维度是否正确
+            channels_match = actual_bev_shape[-3] == expected_channels
+            h_match = actual_bev_shape[-2] == expected_h
+            w_match = actual_bev_shape[-1] == expected_w
+            
+            if channels_match and h_match and w_match:
+                print(f"[✓] BEV 输出尺寸正确: {actual_bev_shape}")
+                print(f"    通道数: {actual_bev_shape[-3]} (期望: {expected_channels})")
+                print(f"    空间尺寸: {actual_bev_shape[-2]}x{actual_bev_shape[-1]} (期望: {expected_h}x{expected_w})")
+            else:
+                print(f"[✗] BEV 输出尺寸不匹配!")
+                print(f"    实际: {actual_bev_shape}")
+                print(f"    期望通道数: {expected_channels}, 实际: {actual_bev_shape[-3]}")
+                print(f"    期望空间尺寸: {expected_h}x{expected_w}, 实际: {actual_bev_shape[-2]}x{actual_bev_shape[-1]}")
+        if encoder_feats_shape is not None and frames is not None:
             print(f"[Event] Encoder output shape: {encoder_feats_shape}")
+            # 验证编码器输出尺寸
+            # 注意：编码器输入已将时间维度S堆叠到通道维度(S*C)，因此输出形状为[B*N, C, H', W']，不包含时间维度
+            b, s, n, c, h, w = frames.shape
+            expected_encoder_shape = (b * n, model.encoder_out_channels, h // model.encoder_downsample, w // model.encoder_downsample)
+            if encoder_feats_shape == expected_encoder_shape:
+                print(f"[✓] Event 编码器输出尺寸正确: {encoder_feats_shape}")
+            else:
+                print(f"[✗] Event 编码器输出尺寸不匹配!")
+                print(f"    期望: {expected_encoder_shape}")
+                print(f"    实际: {encoder_feats_shape}")
         if cfg.MODEL.MODALITY.USE_EVENT:
             print(f"[Event] Voxel files stacked: {voxel_file_count}, Channels: {channels}")
+            # 验证输入事件帧尺寸
+            if torch.is_tensor(event_input):
+                print(f"[Event] 输入事件张量 shape: {tuple(event_input.shape)}")
+                expected_event_shape = (cfg.BATCHSIZE, cfg.TIME_RECEPTIVE_FIELD, len(cfg.IMAGE.NAMES), channels, 
+                                      cfg.IMAGE.FINAL_DIM[0], cfg.IMAGE.FINAL_DIM[1])
+                actual_event_shape = tuple(event_input.shape)
+                if actual_event_shape == expected_event_shape:
+                    print(f"[✓] 输入事件张量尺寸正确: {actual_event_shape}")
+                else:
+                    print(f"[✗] 输入事件张量尺寸不匹配!")
+                    print(f"    期望: {expected_event_shape}")
+                    print(f"    实际: {actual_event_shape}")
+        
+        # 检查流式数据格式
+        if args.test_flow_data:
+            flow_data = batch.get('flow_data')
+            if flow_data is not None:
+                print(f"\n[Flow Data] 检测到流式数据格式")
+                if isinstance(flow_data, list):
+                    print(f"[Flow Data] 流式数据窗口数量: {len(flow_data)}")
+                    # 验证100Hz频率下的窗口数量
+                    temp_dataset_for_flow = None
+                    if cfg.DATASET.NAME == 'dsec':
+                        from streamingflow.datas.DSECData import DatasetDSEC
+                        temp_dataset_for_flow = DatasetDSEC(cfg, cfg, is_train=(args.split == "train"))
+                        expected_windows = temp_dataset_for_flow.num_speed // (1000 // temp_dataset_for_flow.event_speed)
+                        if len(flow_data) == expected_windows:
+                            print(f"[✓] 流式数据窗口数量正确: {len(flow_data)} (期望: {expected_windows})")
+                        else:
+                            print(f"[✗] 流式数据窗口数量不匹配: {len(flow_data)} (期望: {expected_windows})")
+                    
+                    for i, flow_window in enumerate(flow_data):
+                        if isinstance(flow_window, dict):
+                            print(f"  窗口 {i}:")
+                            # 验证每个窗口的事件数量
+                            flow_events = flow_window.get('flow_events', [])
+                            if isinstance(flow_events, (list, tuple)) and len(flow_events) > 0:
+                                expected_event_num = temp_dataset_for_flow.event_speed // 10 if temp_dataset_for_flow else None
+                                if expected_event_num and len(flow_events) == expected_event_num:
+                                    print(f"    [✓] flow_events 数量正确: {len(flow_events)} (期望: {expected_event_num})")
+                                elif expected_event_num:
+                                    print(f"    [✗] flow_events 数量不匹配: {len(flow_events)} (期望: {expected_event_num})")
+                                else:
+                                    print(f"    flow_events: {len(flow_events)} 个事件")
+                            
+                            for key, value in flow_window.items():
+                                if isinstance(value, (list, tuple)):
+                                    print(f"    {key}: list/tuple with {len(value)} elements")
+                                    if len(value) > 0:
+                                        first_elem = value[0]
+                                        if torch.is_tensor(first_elem):
+                                            print(f"      First element shape: {tuple(first_elem.shape)}")
+                                        elif isinstance(first_elem, np.ndarray):
+                                            print(f"      First element shape: {first_elem.shape}")
+                                elif torch.is_tensor(value):
+                                    print(f"    {key}: tensor {tuple(value.shape)}")
+                                elif isinstance(value, np.ndarray):
+                                    print(f"    {key}: array {value.shape}")
+                                else:
+                                    print(f"    {key}: {type(value).__name__}")
+                else:
+                    print(f"[Flow Data] 流式数据格式: {type(flow_data)}")
+            else:
+                print(f"\n[Flow Data] 未检测到流式数据格式（flow_data 为 None）")
+                print(f"[Flow Data] 提示: 在配置文件中设置 DATASET.USE_FLOW_DATA=True 以启用流式数据格式")
 
 
 def build_test_cfg(use_camera=True):
@@ -385,7 +747,14 @@ def run_synthetic_self_check(device):
         if event_data is not None:
             print(f"[Synthetic] Event BEV shape: {tuple(event_data['bev'].shape)}")
 
-        target_timestamp = torch.zeros(batch["image"].size(0), cfg.TIME_RECEPTIVE_FIELD, device=device)
+        # target_timestamp shape: [batch_size], each element is a scalar target time
+        n_future = getattr(cfg, 'N_FUTURE_FRAMES', 0)
+        if n_future > 0:
+            target_time = n_future * 0.1  # Assuming 0.1s per frame
+            target_timestamp = torch.full((batch["image"].size(0),), target_time, device=device)
+            print(f"[Synthetic] NODE enabled: N_FUTURE_FRAMES={n_future}, target_timestamp={target_time:.2f}s")
+        else:
+            target_timestamp = torch.zeros(batch["image"].size(0), device=device)
 
         with torch.no_grad():
             outputs = model(
@@ -542,19 +911,25 @@ def run_encoder_benchmark_test(cfg, args):
                 event_frames = model._prepare_event_frames(event_in, s, device=device)
                 event_frames = event_frames[:, :s]
                 
-                # 2. Pack 序列维度
-                from streamingflow.utils.network import pack_sequence_dim, unpack_sequence_dim
-                event_packed = pack_sequence_dim(event_frames)
+                # 2. 直接reshape: [B, S, N, C, H, W] -> [B*S*N, C, H, W]
+                expected_channels = getattr(cfg.MODEL.EVENT, "IN_CHANNELS", 0)
+                if expected_channels <= 0:
+                    bins = getattr(cfg.MODEL.EVENT, "BINS", 10)
+                    expected_channels = 2 * bins
+                b, s, n, c, h, w = event_frames.shape
+                if c != expected_channels:
+                    raise ValueError(f"事件帧通道数C={c}与期望通道数{expected_channels}不匹配。")
+                event_reshaped = event_frames.view(b * s * n, c, h, w)
                 
                 # 3. Event 编码器前向传播
-                event_feats, event_depth_logits = model.event_encoder_forward(event_packed)
+                event_feats, event_depth_logits = model.event_encoder_forward(event_reshaped)
                 
-                # 4. Unpack
-                event_feats = unpack_sequence_dim(event_feats, b, s)
+                # 4. 恢复形状: [B*S*N, ...] -> [B, S, N, ...]
+                event_feats = event_feats.view(b, s, n, *event_feats.shape[1:])
                 
                 # 5. 调整深度 bins
                 if event_depth_logits is not None:
-                    event_depth_logits_out = unpack_sequence_dim(event_depth_logits, b, s)
+                    event_depth_logits_out = event_depth_logits.view(b, s, n, *event_depth_logits.shape[1:])
                     event_depth_logits_out = model._resize_event_depth_bins(
                         event_depth_logits_out, model.depth_channels
                     )
@@ -1054,6 +1429,7 @@ def parse_args():
     parser.add_argument('--benchmark-encoder-only', action='store_true', help='只测试 Event 编码器到 BEV 投影前的速度（不包括 BEV 投影、时序模型、解码器）。')
     parser.add_argument('--num-warmup', type=int, default=5, help='速度测试预热次数。')
     parser.add_argument('--save-benchmark', type=str, default=None, help='基准测试结果保存路径（CSV格式）。')
+    parser.add_argument('--test-flow-data', action='store_true', help='测试流式数据格式（flow_data）。需要在配置文件中设置 DATASET.USE_FLOW_DATA=True。')
     return parser.parse_args()
 
 

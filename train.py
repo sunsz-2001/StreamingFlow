@@ -72,23 +72,67 @@ def main():
     )
 
     latest_ckpt = get_latest_checkpoint(save_dir)
+    
+    # 检查 checkpoint 是否存在且有效
+    if latest_ckpt is not None:
+        if not os.path.exists(latest_ckpt):
+            print(f"WARNING: Checkpoint file not found: {latest_ckpt}")
+            print("Starting training from scratch (no checkpoint resume).")
+            latest_ckpt = None
+        else:
+            # 尝试加载 checkpoint 并检查是否包含 NaN 权重
+            try:
+                print(f"Checking checkpoint file: {latest_ckpt}")
+                ckpt = torch.load(latest_ckpt, map_location='cpu')
+                if 'state_dict' in ckpt:
+                    state_dict = ckpt['state_dict']
+                    has_nan_in_ckpt = False
+                    for key, value in state_dict.items():
+                        if isinstance(value, torch.Tensor):
+                            if torch.isnan(value).any() or torch.isinf(value).any():
+                                print(f"WARNING: NaN/Inf found in checkpoint parameter: {key}")
+                                has_nan_in_ckpt = True
+                    if has_nan_in_ckpt:
+                        print("WARNING: Checkpoint contains NaN/Inf weights! Will not resume from this checkpoint.")
+                        print("Starting training from scratch.")
+                        latest_ckpt = None
+                    else:
+                        print(f"Checkpoint validation passed: {latest_ckpt}")
+                else:
+                    print(f"WARNING: Checkpoint file does not contain 'state_dict' key. Will not resume.")
+                    latest_ckpt = None
+            except Exception as e:
+                print(f"WARNING: Failed to load checkpoint file: {e}")
+                print("Starting training from scratch.")
+                latest_ckpt = None
+    else:
+        print("No checkpoint found. Starting training from scratch.")
+
+    # 根据GPU数量自动选择训练模式
+    num_gpus = len(cfg.GPUS) if isinstance(cfg.GPUS, list) else 1
+    if num_gpus > 1:
+        accelerator = 'ddp'
+        plugins = DDPPlugin(find_unused_parameters=False)
+    else:
+        accelerator = None
+        plugins = None
 
     trainer = pl.Trainer(
         gpus=cfg.GPUS,
-        accelerator='ddp',
+        accelerator=accelerator,
         precision=cfg.PRECISION,
-        sync_batchnorm=True,
+        sync_batchnorm=True if num_gpus > 1 else False,
         gradient_clip_val=cfg.GRAD_NORM_CLIP,
         max_epochs=cfg.EPOCHS,
         weights_summary='full',
         logger=tb_logger,
         log_every_n_steps=cfg.LOGGING_INTERVAL,
-        plugins=DDPPlugin(find_unused_parameters=False),
+        plugins=plugins,
         profiler='simple',
         callbacks=[checkpoint_callback],
-        resume_from_checkpoint = latest_ckpt
-
+        resume_from_checkpoint=latest_ckpt
     )
+    
     trainer.fit(model, trainloader, valloader)
 
 

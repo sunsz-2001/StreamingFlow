@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import numpy as np
 import pytorch_lightning as pl
 
 from streamingflow.config import get_cfg
@@ -100,20 +101,29 @@ class TrainingModule(pl.LightningModule):
             self.metric_planning_val = PlanningMetric(self.cfg, self.cfg.N_FUTURE_FRAMES)
             self.model.planning_weight = nn.Parameter(torch.tensor(0.0), requires_grad=True)
 
+        # Detection
+        if getattr(self.cfg, 'DETECTION', None) and getattr(self.cfg.DETECTION, 'ENABLED', False):
+            self.model.detection_weight = nn.Parameter(torch.tensor(0.0), requires_grad=True)
+
         self.training_step_count = 0
 
     def shared_step(self, batch, is_train):
-        image = batch['image']
+        image = batch.get('image')
         intrinsics = batch['intrinsics']
         extrinsics = batch['extrinsics']
         camera_timestamps = batch['camera_timestamp']
         target_timestamp = batch['target_timestamp']
 
         future_egomotion = batch['future_egomotion']
-        if not self.is_lyft:
-            command = batch['command']
-            trajs = batch['sample_trajectory']
-            target_points = batch['target_point']
+        # 只在规划任务启用且非lyft数据集时访问这些字段
+        if not self.is_lyft and self.cfg.PLANNING.ENABLED:
+            command = batch.get('command', 'FORWARD')
+            trajs = batch.get('sample_trajectory', None)
+            target_points = batch.get('target_point', None)
+        else:
+            command = None
+            trajs = None
+            target_points = None
         range_clouds = None
         radar_pointclouds = None  
         padded_voxel_points = None
@@ -130,19 +140,59 @@ class TrainingModule(pl.LightningModule):
             else:
                 points = batch['points']
                 lidar_timestamps = batch['lidar_timestamp']
-        B = len(image)
-
-        # Warp labels
-        labels = self.prepare_future_labels(batch)
         
+        # 获取 batch size：优先从 image，否则从 event 或其他可用字段
+        if image is not None:
+            B = len(image)
+        elif self.cfg.MODEL.MODALITY.USE_EVENT and batch.get('event') is not None:
+            event = batch['event']
+            if torch.is_tensor(event):
+                B = event.shape[0]
+            elif isinstance(event, dict) and 'frames' in event:
+                B = event['frames'].shape[0]
+            else:
+                B = intrinsics.shape[0]
+        else:
+            B = intrinsics.shape[0]
+
+        # 提取检测标签（如果启用检测）
+        gt_bboxes_3d = None
+        gt_labels_3d = None
+        metas = None
+        if getattr(self.cfg, 'DETECTION', None) and getattr(self.cfg.DETECTION, 'ENABLED', False):
+            gt_bboxes_3d = batch.get('gt_bboxes_3d')
+            gt_labels_3d = batch.get('gt_labels_3d')
+            metas = batch.get('metas')
+            if gt_bboxes_3d is None or gt_labels_3d is None:
+                raise ValueError("DETECTION.ENABLED is True but gt_bboxes_3d or gt_labels_3d is missing in batch")
+            if metas is None:
+                raise ValueError("DETECTION.ENABLED is True but metas is missing in batch")
+            
+            # 确保gt_labels_3d是torch.Tensor格式并在正确的device上
+            if gt_labels_3d is not None:
+                device = next(self.model.parameters()).device
+                converted_labels = []
+                for v in gt_labels_3d:
+                    if v is None:
+                        converted_labels.append(torch.tensor([], dtype=torch.long, device=device))
+                    elif isinstance(v, np.ndarray):
+                        converted_labels.append(torch.from_numpy(v).long().to(device))
+                    elif isinstance(v, torch.Tensor):
+                        converted_labels.append(v.long().to(device))
+                    else:
+                        converted_labels.append(torch.tensor(v, dtype=torch.long, device=device))
+                gt_labels_3d = converted_labels
+
+        # Warp labels (仅用于分割任务)
+        labels = self.prepare_future_labels(batch) if not (getattr(self.cfg, 'DETECTION', None) and getattr(self.cfg.DETECTION, 'ENABLED', False)) else {}
 
         # Forward pass
         event = batch['event'] if self.cfg.MODEL.MODALITY.USE_EVENT else None
-
+        
         output = self.model(
             image, intrinsics, extrinsics, future_egomotion, padded_voxel_points,camera_timestamps, points,lidar_timestamps,target_timestamp,
             image_hi=batch.get('image_hi'), intrinsics_hi=batch.get('intrinsics_hi'), extrinsics_hi=batch.get('extrinsics_hi'),
-            camera_timestamp_hi=batch.get('camera_timestamp_hi'), event=event
+            camera_timestamp_hi=batch.get('camera_timestamp_hi'), event=event, metas=metas
         )
 
         #####
@@ -151,23 +201,24 @@ class TrainingModule(pl.LightningModule):
         loss = {}
 
         if is_train:
-            # segmentation
-            segmentation_factor = 1 / (2 * torch.exp(self.model.segmentation_weight))
-            loss['segmentation'] = segmentation_factor * self.losses_fn['segmentation'](
-                output['segmentation'], labels['segmentation'], self.model.receptive_field
-            )
-            loss['segmentation_uncertainty'] = 0.5 * self.model.segmentation_weight
+            # segmentation (only if not using detection task)
+            if 'segmentation' in output and 'segmentation' in labels:
+                segmentation_factor = 1 / (2 * torch.exp(self.model.segmentation_weight))
+                loss['segmentation'] = segmentation_factor * self.losses_fn['segmentation'](
+                    output['segmentation'], labels['segmentation'], self.model.receptive_field
+                )
+                loss['segmentation_uncertainty'] = 0.5 * self.model.segmentation_weight
 
-            # Pedestrian
-            if self.cfg.SEMANTIC_SEG.PEDESTRIAN.ENABLED:
+            # Pedestrian (only if segmentation is enabled)
+            if 'pedestrian' in output and 'pedestrian' in labels and self.cfg.SEMANTIC_SEG.PEDESTRIAN.ENABLED:
                 pedestrian_factor = 1 / (2 * torch.exp(self.model.pedestrian_weight))
                 loss['pedestrian'] = pedestrian_factor * self.losses_fn['pedestrian'](
                     output['pedestrian'], labels['pedestrian'], self.model.receptive_field
                 )
                 loss['pedestrian_uncertainty'] = 0.5 * self.model.pedestrian_weight
 
-            # hdmap loss
-            if self.cfg.SEMANTIC_SEG.HDMAP.ENABLED:
+            # hdmap loss (only if segmentation is enabled)
+            if 'hdmap' in output and 'hdmap' in labels and self.cfg.SEMANTIC_SEG.HDMAP.ENABLED:
                 hdmap_factor = 1 / (2 * torch.exp(self.model.hdmap_weight))
                 loss['hdmap'] = hdmap_factor * self.losses_fn['hdmap'](output['hdmap'], labels['hdmap'])
                 loss['hdmap_uncertainty'] = 0.5 * self.model.hdmap_weight
@@ -202,6 +253,29 @@ class TrainingModule(pl.LightningModule):
                 )
                 loss['flow_uncertainty'] = 0.5 * self.model.flow_weight
 
+            # Detection loss
+            if getattr(self.cfg, 'DETECTION', None) and getattr(self.cfg.DETECTION, 'ENABLED', False):
+                detection_losses = self.model.decoder.detection_head.loss(
+                    gt_bboxes_3d, gt_labels_3d, output['detection']
+                )
+                # Check for NaN in detection losses
+                for key, val in detection_losses.items():
+                    if torch.isnan(val).any() or torch.isinf(val).any():
+                        print(f"Warning: NaN/Inf detected in detection_losses['{key}']: {val}")
+                        # Replace NaN/Inf with 0 to prevent propagation
+                        detection_losses[key] = torch.where(
+                            torch.isnan(val) | torch.isinf(val),
+                            torch.zeros_like(val),
+                            val
+                        )
+                
+                # Clamp detection_weight to prevent exp overflow
+                detection_weight_clamped = torch.clamp(self.model.detection_weight, min=-10.0, max=10.0)
+                detection_factor = 1 / (2 * torch.exp(detection_weight_clamped))
+                for key, val in detection_losses.items():
+                    loss[f'detection_{key}'] = detection_factor * val
+                loss['detection_uncertainty'] = 0.5 * self.model.detection_weight
+
             # Planning
             if self.cfg.PLANNING.ENABLED:
                 receptive_field = self.model.receptive_field
@@ -229,38 +303,46 @@ class TrainingModule(pl.LightningModule):
         # Metrics
         else:
             n_present = self.model.receptive_field
+            
+            # 检查是否使用检测模式
+            is_detection_mode = getattr(self.cfg, 'DETECTION', None) and getattr(self.cfg.DETECTION, 'ENABLED', False)
 
-            # semantic segmentation metric
-            seg_prediction = output['segmentation'].detach()
-            seg_prediction = torch.argmax(seg_prediction, dim=2, keepdim=True)
-            self.metric_vehicle_val(seg_prediction[:, n_present - 1:], labels['segmentation'][:, n_present - 1:])
+            # semantic segmentation metric (only if not using detection task)
+            seg_prediction = None
+            pedestrian_prediction = None
+            if not is_detection_mode and 'segmentation' in output and 'segmentation' in labels:
+                seg_prediction = output['segmentation'].detach()
+                seg_prediction = torch.argmax(seg_prediction, dim=2, keepdim=True)
+                self.metric_vehicle_val(seg_prediction[:, n_present - 1:], labels['segmentation'][:, n_present - 1:])
 
-            # pedestrian segmentation metric
-            if self.cfg.SEMANTIC_SEG.PEDESTRIAN.ENABLED:
-                pedestrian_prediction = output['pedestrian'].detach()
-                pedestrian_prediction = torch.argmax(pedestrian_prediction, dim=2, keepdim=True)
-                self.metric_pedestrian_val(pedestrian_prediction[:, n_present - 1:],
-                                           labels['pedestrian'][:, n_present - 1:])
-            else:
-                pedestrian_prediction = torch.zeros_like(seg_prediction)
+            # pedestrian segmentation metric (only if not using detection task and segmentation is enabled)
+            if not is_detection_mode:
+                if self.cfg.SEMANTIC_SEG.PEDESTRIAN.ENABLED and 'pedestrian' in output and 'pedestrian' in labels:
+                    pedestrian_prediction = output['pedestrian'].detach()
+                    pedestrian_prediction = torch.argmax(pedestrian_prediction, dim=2, keepdim=True)
+                    self.metric_pedestrian_val(pedestrian_prediction[:, n_present - 1:],
+                                               labels['pedestrian'][:, n_present - 1:])
+                elif seg_prediction is not None:
+                    pedestrian_prediction = torch.zeros_like(seg_prediction)
 
-            # hdmap metric
-            if self.cfg.SEMANTIC_SEG.HDMAP.ENABLED:
-                for i in range(len(self.hdmap_class)):
-                    hdmap_prediction = output['hdmap'][:, 2 * i:2 * (i + 1)].detach()
-                    hdmap_prediction = torch.argmax(hdmap_prediction, dim=1, keepdim=True)
-                    self.metric_hdmap_val[i](hdmap_prediction, labels['hdmap'][:, i:i + 1])
+            # hdmap metric (only if not using detection task)
+            if not is_detection_mode and 'segmentation' in output and 'segmentation' in labels:
+                if self.cfg.SEMANTIC_SEG.HDMAP.ENABLED:
+                    for i in range(len(self.hdmap_class)):
+                        hdmap_prediction = output['hdmap'][:, 2 * i:2 * (i + 1)].detach()
+                        hdmap_prediction = torch.argmax(hdmap_prediction, dim=1, keepdim=True)
+                        self.metric_hdmap_val[i](hdmap_prediction, labels['hdmap'][:, i:i + 1])
 
-            # instance segmentation metric
-            if self.cfg.INSTANCE_SEG.ENABLED:
+            # instance segmentation metric (only if not using detection task)
+            if not is_detection_mode and self.cfg.INSTANCE_SEG.ENABLED:
                 pred_consistent_instance_seg = predict_instance_segmentation_and_trajectories(
                     output, compute_matched_centers=False
                 )
                 self.metric_panoptic_val(pred_consistent_instance_seg[:, n_present - 1:],
                                          labels['instance'][:, n_present - 1:])
 
-            # planning metric
-            if self.cfg.PLANNING.ENABLED:
+            # planning metric (only if not using detection task)
+            if not is_detection_mode and self.cfg.PLANNING.ENABLED and seg_prediction is not None and pedestrian_prediction is not None:
                 occupancy = torch.logical_or(seg_prediction, pedestrian_prediction)
                 _, final_traj = self.model.planning(
                     cam_front=output['cam_front'].detach(),
@@ -280,7 +362,7 @@ class TrainingModule(pl.LightningModule):
                                                     dim=1)}
             else:
                 if 'gt_trajectory' in labels:
-                    output = {**output, 'selected_traj': labels['gt_trajectory']}
+                    output = {**output, 'selected_trajectory': labels['gt_trajectory']}
 
         return output, labels, loss
 
@@ -398,6 +480,10 @@ class TrainingModule(pl.LightningModule):
         return labels
 
     def visualise(self, labels, output, batch_idx, prefix='train'):
+        # 如果是检测任务，跳过可视化（因为visualise_output只支持分割任务）
+        if getattr(self.cfg, 'DETECTION', None) and getattr(self.cfg.DETECTION, 'ENABLED', False):
+            return  # TODO: 未来可以实现检测任务的可视化
+        
         visualisation_video = visualise_output(labels, output, self.cfg)
         name = f'{prefix}_outputs'
         if prefix == 'val':
@@ -407,12 +493,115 @@ class TrainingModule(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         output, labels, loss = self.shared_step(batch, True)
         self.training_step_count += 1
+        
+        # DIAGNOSIS: 保存 loss 信息供 backward 后检查
+        if not hasattr(self, '_first_step_loss_saved'):
+            self._first_step_loss_saved = True
+            self._last_loss_dict = loss.copy()
+        
         for key, value in loss.items():
             self.logger.experiment.add_scalar('step_train_loss_' + key, value, global_step=self.training_step_count)
         if self.training_step_count % self.cfg.VIS_INTERVAL == 0:
             self.visualise(labels, output, batch_idx, prefix='train')
 
-        return sum(loss.values())
+        total_loss = sum(loss.values())
+        return total_loss
+
+    def on_after_backward(self):
+        """DIAGNOSIS: 检查 backward 后的梯度状态，定位 NaN 来源"""
+        if not hasattr(self, '_first_backward_checked'):
+            self._first_backward_checked = True
+            print("=" * 80)
+            print("DIAGNOSIS: First training step - checking gradients AFTER backward...")
+            print("=" * 80)
+            
+            # 显示 loss 信息
+            if hasattr(self, '_last_loss_dict'):
+                print("  Loss components:")
+                for key, val in self._last_loss_dict.items():
+                    if torch.is_tensor(val):
+                        val_item = val.item() if val.numel() == 1 else f"shape={val.shape}"
+                        print(f"    - {key}: {val_item}")
+            
+            # 检查所有模块的梯度
+            nan_grad_modules = {}
+            total_grad_norm = 0.0
+            param_count = 0
+            max_grad_norm = 0.0
+            max_grad_param_name = None
+            
+            for module_name, module in self.model.named_modules():
+                if module_name == '':
+                    continue
+                module_nan_count = 0
+                module_param_count = 0
+                module_grad_norm = 0.0
+                
+                for name, param in module.named_parameters(recurse=False):
+                    if param.grad is not None:
+                        module_param_count += 1
+                        param_count += 1
+                        param_grad_norm = param.grad.norm().item()
+                        module_grad_norm += param_grad_norm
+                        total_grad_norm += param_grad_norm
+                        
+                        if param_grad_norm > max_grad_norm:
+                            max_grad_norm = param_grad_norm
+                            max_grad_param_name = f"{module_name}.{name}"
+                        
+                        if torch.isnan(param.grad).any() or torch.isinf(param.grad).any():
+                            module_nan_count += 1
+                            if module_name not in nan_grad_modules:
+                                nan_grad_modules[module_name] = []
+                            try:
+                                grad_min = param.grad.min().item()
+                                grad_max = param.grad.max().item()
+                                grad_mean = param.grad.mean().item()
+                            except:
+                                grad_min = grad_max = grad_mean = float('nan')
+                            nan_grad_modules[module_name].append({
+                                'name': name,
+                                'has_nan': torch.isnan(param.grad).any().item(),
+                                'has_inf': torch.isinf(param.grad).any().item(),
+                                'grad_norm': param_grad_norm,
+                                'grad_stats': f"min={grad_min:.6f}, max={grad_max:.6f}, mean={grad_mean:.6f}"
+                            })
+                
+                if module_nan_count > 0:
+                    print(f"\n  ERROR: Module '{module_name}' has {module_nan_count}/{module_param_count} parameters with NaN/Inf gradients")
+                    for param_info in nan_grad_modules[module_name][:3]:  # 只显示前3个
+                        print(f"    - {param_info['name']}: NaN={param_info['has_nan']}, Inf={param_info['has_inf']}, norm={param_info['grad_norm']:.6f}")
+                        print(f"      {param_info['grad_stats']}")
+            
+            print(f"\n  Total parameters with gradients: {param_count}")
+            print(f"  Total gradient norm: {total_grad_norm:.6f}")
+            print(f"  Max gradient norm: {max_grad_norm:.6f} (parameter: {max_grad_param_name})")
+            print(f"  Modules with NaN/Inf gradients: {len(nan_grad_modules)}")
+            
+            if len(nan_grad_modules) > 0:
+                print(f"\n  ERROR: Found NaN/Inf gradients in {len(nan_grad_modules)} modules:")
+                for module_name in list(nan_grad_modules.keys())[:10]:  # 只显示前10个模块
+                    print(f"    - {module_name}: {len(nan_grad_modules[module_name])} parameters")
+                
+                # 尝试推断是哪个 loss 项导致的
+                print(f"\n  Potential loss sources:")
+                if any('detection' in name or 'head' in name or 'decoder' in name for name in nan_grad_modules.keys()):
+                    print(f"    - Detection loss components (detection_loss_heatmap, detection_layer_*_loss_cls, detection_layer_*_loss_bbox)")
+                if any('event_encoder' in name or 'backbone' in name for name in nan_grad_modules.keys()):
+                    print(f"    - Event encoder/backbone (affected by all loss components)")
+            else:
+                print(f"  ✓ All gradients are valid")
+            
+            # 检查梯度裁剪配置
+            if hasattr(self.trainer, 'gradient_clip_val') and self.trainer.gradient_clip_val is not None:
+                print(f"\n  Gradient clipping enabled: max_norm={self.trainer.gradient_clip_val}")
+                if total_grad_norm > self.trainer.gradient_clip_val:
+                    print(f"  WARNING: Total gradient norm ({total_grad_norm:.6f}) exceeds clip value!")
+            else:
+                print(f"\n  Gradient clipping: NOT ENABLED")
+            
+            print("=" * 80)
+    
 
     def validation_step(self, batch, batch_idx):
         output, labels, loss = self.shared_step(batch, False)
@@ -496,9 +685,36 @@ class TrainingModule(pl.LightningModule):
         self.shared_epoch_end(step_outputs, False)
 
     def configure_optimizers(self):
-        params = self.model.parameters()
-        optimizer = torch.optim.Adam(
-            params, lr=self.cfg.OPTIMIZER.LR, weight_decay=self.cfg.OPTIMIZER.WEIGHT_DECAY
-        )
+        """配置优化器，支持事件编码器的分组学习率"""
+        # 检查是否需要为事件编码器设置不同的学习率
+        event_lr = getattr(self.cfg.OPTIMIZER, 'EVENT_LR', None)
+        use_event = getattr(self.cfg.MODEL.MODALITY, 'USE_EVENT', False)
+        
+        if use_event and event_lr is not None and self.model.event_encoder is not None:
+            # 分组学习率：事件编码器使用 EVENT_LR，其他参数使用默认 LR
+            event_params = []
+            other_params = []
+            
+            for name, param in self.model.named_parameters():
+                if not param.requires_grad:
+                    continue  # 跳过冻结的参数（如冻结的backbone）
+                if 'event_encoder' in name:
+                    event_params.append(param)
+                else:
+                    other_params.append(param)
+            
+            param_groups = [
+                {'params': other_params, 'lr': self.cfg.OPTIMIZER.LR},
+                {'params': event_params, 'lr': event_lr},
+            ]
+            optimizer = torch.optim.Adam(
+                param_groups, lr=self.cfg.OPTIMIZER.LR, weight_decay=self.cfg.OPTIMIZER.WEIGHT_DECAY
+            )
+        else:
+            # 单一学习率：所有参数使用默认 LR
+            params = [p for p in self.model.parameters() if p.requires_grad]
+            optimizer = torch.optim.Adam(
+                params, lr=self.cfg.OPTIMIZER.LR, weight_decay=self.cfg.OPTIMIZER.WEIGHT_DECAY
+            )
 
         return optimizer

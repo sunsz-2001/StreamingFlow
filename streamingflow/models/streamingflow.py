@@ -9,6 +9,7 @@ from streamingflow.models.event_encoder_evrt import EventEncoderEvRT
 from streamingflow.models.temporal_model import TemporalModelIdentity, TemporalModel
 from streamingflow.models.distributions import DistributionModule
 from streamingflow.models.decoder import Decoder
+from streamingflow.models.detection_decoder import DetectionDecoder
 from streamingflow.models.planning_model import Planning
 from streamingflow.utils.network import pack_sequence_dim, unpack_sequence_dim, set_bn_momentum
 from streamingflow.utils.geometry import calculate_birds_eye_view_parameters, VoxelsSumming, pose_vec2mat
@@ -22,6 +23,23 @@ import time
 from mmdet3d.ops import bev_pool
 from mmdet3d.ops import Voxelization, DynamicScatter
 from mmdet3d.models.builder import build_backbone
+
+
+def _validate_tensor(tensor, name, allow_inf=False):
+    """Validate tensor for NaN/Inf values and raise error if found.
+    
+    Args:
+        tensor: Tensor to validate
+        name: Name for error message
+        allow_inf: If True, only check for NaN, not Inf
+    """
+    if torch.isnan(tensor).any():
+        stats = f"min={tensor.min().item():.6f}, max={tensor.max().item():.6f}, mean={tensor.mean().item():.6f}"
+        raise ValueError(f"NaN detected in {name}. Stats: {stats}, shape: {tensor.shape}")
+    if not allow_inf and torch.isinf(tensor).any():
+        stats = f"min={tensor.min().item():.6f}, max={tensor.max().item():.6f}, mean={tensor.mean().item():.6f}"
+        raise ValueError(f"Inf detected in {name}. Stats: {stats}, shape: {tensor.shape}")
+
 
 class streamingflow(nn.Module):
     def __init__(self, cfg):
@@ -37,15 +55,19 @@ class streamingflow(nn.Module):
 
         self.encoder_downsample = self.cfg.MODEL.ENCODER.DOWNSAMPLE
         self.encoder_out_channels = self.cfg.MODEL.ENCODER.OUT_CHANNELS
-
-        self.frustum = self.create_frustum()
-        self.depth_channels, _, _, _ = self.frustum.shape
-        self.discount = self.cfg.LIFT.DISCOUNT
-
+        
+        # 设置模态使用标志（需要在 create_frustum 之前设置，因为 create_frustum 需要知道是否使用 event）
         self.use_radar = self.cfg.MODEL.MODALITY.USE_RADAR
         self.use_lidar = self.cfg.MODEL.MODALITY.USE_LIDAR
         self.use_camera = self.cfg.MODEL.MODALITY.USE_CAMERA
         self.use_event = getattr(self.cfg.MODEL.MODALITY, "USE_EVENT", False)
+        
+        # Event encoder 下采样率（EventEncoderEvRT 固定为 8）
+        self.event_downsample = getattr(self.cfg.MODEL.EVENT, "DOWNSAMPLE", 8)
+
+        self.frustum = self.create_frustum()
+        self.depth_channels, _, _, _ = self.frustum.shape
+        self.discount = self.cfg.LIFT.DISCOUNT
         self.event_tensorizer = None
 
         if self.cfg.TIME_RECEPTIVE_FIELD == 1:
@@ -136,20 +158,23 @@ class streamingflow(nn.Module):
         self.bev_h = int((self.cfg.LIFT.X_BOUND[1]-self.cfg.LIFT.X_BOUND[0])/self.cfg.LIFT.X_BOUND[2])
         self.bev_w = int((self.cfg.LIFT.Y_BOUND[1]-self.cfg.LIFT.Y_BOUND[0])/self.cfg.LIFT.Y_BOUND[2])
 
-        # Decoder
-        self.decoder = Decoder(
-            in_channels=self.future_pred_in_channels,
-            n_classes=len(self.cfg.SEMANTIC_SEG.VEHICLE.WEIGHTS),
-            n_present=self.receptive_field,
-            n_hdmap=len(self.cfg.SEMANTIC_SEG.HDMAP.ELEMENTS),
-            predict_gate = {
-                'perceive_hdmap': self.cfg.SEMANTIC_SEG.HDMAP.ENABLED,
-                'predict_pedestrian': self.cfg.SEMANTIC_SEG.PEDESTRIAN.ENABLED,
-                'predict_instance': self.cfg.INSTANCE_SEG.ENABLED,
-                'predict_future_flow': self.cfg.INSTANCE_FLOW.ENABLED,
-                'planning': self.cfg.PLANNING.ENABLED,
-            }
-        )
+        # Decoder: 根据配置选择检测或分割解码器
+        if getattr(self.cfg, 'DETECTION', None) and getattr(self.cfg.DETECTION, 'ENABLED', False):
+            self.decoder = DetectionDecoder(self.cfg)
+        else:
+            self.decoder = Decoder(
+                in_channels=self.future_pred_in_channels,
+                n_classes=len(self.cfg.SEMANTIC_SEG.VEHICLE.WEIGHTS),
+                n_present=self.receptive_field,
+                n_hdmap=len(self.cfg.SEMANTIC_SEG.HDMAP.ELEMENTS),
+                predict_gate = {
+                    'perceive_hdmap': self.cfg.SEMANTIC_SEG.HDMAP.ENABLED,
+                    'predict_pedestrian': self.cfg.SEMANTIC_SEG.PEDESTRIAN.ENABLED,
+                    'predict_instance': self.cfg.INSTANCE_SEG.ENABLED,
+                    'predict_future_flow': self.cfg.INSTANCE_FLOW.ENABLED,
+                    'planning': self.cfg.PLANNING.ENABLED,
+                }
+            )
 
         if self.use_lidar:          
             encoders = {'lidar': {'voxelize': {'max_num_points': 10, 'point_cloud_range': [-50.0, -50.0, -5.0, 50.0, 50.0, 3.0], 'voxel_size': [0.0625, 0.0625, 0.2], 'max_voxels': [120000, 160000]}, 'backbone': {'type': 'SparseEncoder', 'in_channels': 5, 'sparse_shape': [1600, 1600, 41], 'output_channels': 128, 'order': ['conv', 'norm', 'act'], 'encoder_channels': [[16, 16, 32], [32, 32, 64], [64, 64, 128], [128, 128]], 'encoder_paddings': [[0, 0, 1], [0, 0, 1], [0, 0, [1, 1, 0]], [0, 0]], 'block_type': 'basicblock'}}, 'temporal_model': {'type': 'Temporal3DConvModel', 'receptive_field': 3, 'input_egopose': True, 'in_channels': 256, 'input_shape': [200, 200], 'with_skip_connect': True, 'start_out_channels': 256, 'det_grid_conf': {'xbound': [-54.0, 54.0, 0.6], 'ybound': [-54.0, 54.0, 0.6], 'zbound': [-10.0, 10.0, 20.0], 'dbound': [1.0, 60.0, 1.0]}, 'grid_conf': {'xbound': [-50.0, 50.0, 0.5], 'ybound': [-50.0, 50.0, 0.5], 'zbound': [-10.0, 10.0, 20.0], 'dbound': [1.0, 60.0, 1.0]}}}
@@ -185,8 +210,18 @@ class streamingflow(nn.Module):
 
     def create_frustum(self):
         # Create grid in image plane
-        h, w = self.cfg.IMAGE.FINAL_DIM
-        downsampled_h, downsampled_w = h // self.encoder_downsample, w // self.encoder_downsample
+        # 如果以 event 为主，优先使用 event 的输入分辨率
+        event_input_size = getattr(self.cfg.MODEL.EVENT, "INPUT_SIZE", [0, 0])
+        if self.use_event and event_input_size[0] > 0 and event_input_size[1] > 0:
+            # 使用 event 的输入分辨率
+            h, w = event_input_size
+            downsample = self.event_downsample
+        else:
+            # 使用 IMAGE.FINAL_DIM（camera 分支或未配置 event 输入分辨率时）
+            h, w = self.cfg.IMAGE.FINAL_DIM
+            downsample = self.encoder_downsample
+        
+        downsampled_h, downsampled_w = h // downsample, w // downsample
 
         # Depth grid
         depth_grid = torch.arange(*self.cfg.LIFT.D_BOUND, dtype=torch.float)
@@ -200,7 +235,7 @@ class streamingflow(nn.Module):
         y_grid = y_grid.view(1, downsampled_h, 1).expand(n_depth_slices, downsampled_h, downsampled_w)
 
         # Dimension (n_depth_slices, downsampled_h, downsampled_w, 3)
-        # containing data points in the image: left-right, top-bottom, depth
+        # containing data points in the image: left-right, top-bottom, depth
         frustum = torch.stack((x_grid, y_grid, depth_grid), -1)
         return nn.Parameter(frustum, requires_grad=False)
     
@@ -256,7 +291,7 @@ class streamingflow(nn.Module):
         return x
 
     def forward(self, image, intrinsics, extrinsics, future_egomotion, padded_voxel_points=None, camera_timestamp=None, points=None,lidar_timestamp=None, target_timestamp=None,
-                image_hi=None, intrinsics_hi=None, extrinsics_hi=None, camera_timestamp_hi=None, event=None):
+                image_hi=None, intrinsics_hi=None, extrinsics_hi=None, camera_timestamp_hi=None, event=None, metas=None):
         output = {}
 
         future_egomotion = future_egomotion[:, :self.receptive_field].contiguous()
@@ -339,6 +374,19 @@ class streamingflow(nn.Module):
                 else:
                     raise ValueError(f"Unsupported MODEL.EVENT.BEV_FUSION={self.event_bev_fusion}")
 
+            # Check bev_sequence for NaN/Inf after event fusion
+            if torch.isnan(bev_sequence).any() or torch.isinf(bev_sequence).any():
+                print(f"Warning: NaN/Inf in bev_sequence after event fusion")
+                print(f"  bev_sequence stats: min={bev_sequence.min()}, max={bev_sequence.max()}, mean={bev_sequence.mean()}")
+                if "event" in output and "bev" in output["event"]:
+                    print(f"  event_data['bev'] stats: min={event_data['bev'].min()}, max={event_data['bev'].max()}, mean={event_data['bev'].mean()}")
+                # Replace NaN/Inf with 0
+                bev_sequence = torch.where(
+                    torch.isnan(bev_sequence) | torch.isinf(bev_sequence),
+                    torch.zeros_like(bev_sequence),
+                    bev_sequence
+                )
+
         if bev_sequence is None:
             raise RuntimeError("Failed to compute BEV features from available modalities.")
 
@@ -379,12 +427,15 @@ class streamingflow(nn.Module):
                 camera_states_hi = hi_outputs["camera"]["bev"].contiguous()  # [B, S_cam, C, H, W]
 
         if self.n_future > 0:
-
+            # 保存过去帧（用于后续拼接）
+            past_states = states  # [B, TIME_RECEPTIVE_FIELD, C, H, W]
+            
             present_state = states[:, -1:].contiguous()
         
             future_prediction_input = present_state # not used actually
             
-            states, auxilary_loss = self.future_prediction_ode(
+            # NODE 输出未来帧
+            future_states, auxilary_loss = self.future_prediction_ode(
                 future_prediction_input,
                 camera_states,
                 lidar_states,
@@ -394,13 +445,20 @@ class streamingflow(nn.Module):
                 camera_states_hi=camera_states_hi,
                 camera_timestamp_hi=camera_timestamp_hi,
             )
+            
+            # 拼接过去帧和未来帧: [B, TIME_RECEPTIVE_FIELD + n_future, C, H, W]
+            states = torch.cat([past_states, future_states], dim=1)
     
             # predict BEV outputs
-            bev_output = self.decoder(states)
+            # Check states before passing to decoder
+            _validate_tensor(states, "states before decoder (with temporal model)")
+            bev_output = self.decoder(states, metas)
 
         else:
             # Perceive BEV outputs
-            bev_output = self.decoder(states)
+            # Check states before passing to decoder
+            _validate_tensor(states, "states before decoder (without temporal model)")
+            bev_output = self.decoder(states, metas)
 
         output = {**output, **bev_output}
 
@@ -447,20 +505,50 @@ class streamingflow(nn.Module):
         return x, depth, cam_front
 
     def event_encoder_forward(self, event_frames):
+        """
+        事件编码器前向传播。
+        
+        Args:
+            event_frames: [B*S*N, C, H, W] 其中C是每个时间步的通道数（IN_CHANNELS）
+        
+        Returns:
+            feats: [B*S*N, out_channels, H', W']
+            depth_logits: [B*S*N, depth_bins, H', W'] 或 None
+        """
         if not self.use_event:
             raise RuntimeError("Event encoder requested but USE_EVENT is False.")
-        b, n, c, h, w = event_frames.shape
-        event_frames = event_frames.contiguous().view(b * n, c, h, w)
+        # event_frames已经是[B*S*N, C, H, W]形状，直接传入编码器
         feats, depth_logits = self.event_encoder(event_frames)
-        feats = feats.view(b, n, *feats.shape[1:])
-        if depth_logits is not None:
-            depth_logits = depth_logits.view(b, n, *depth_logits.shape[1:])
         return feats, depth_logits
 
     def _resize_event_depth_bins(self, depth_logits, target_bins):
-        if depth_logits.shape[3] == target_bins:
-            return depth_logits
+        # 检查输入维度
+        if depth_logits.dim() == 4:
+            # 如果是 4 维 [B, D, H, W]，需要先转换为 6 维
+            b, d, h, w = depth_logits.shape
+            # 假设这是单个样本，添加 S 和 N 维度
+            depth_logits = depth_logits.unsqueeze(1).unsqueeze(1)  # [B, 1, 1, D, H, W]
+        elif depth_logits.dim() == 5:
+            # 如果是 5 维，可能是 [B, S, D, H, W] 或 [B, N, D, H, W]
+            # 需要判断并添加缺失的维度
+            if depth_logits.shape[2] == target_bins or depth_logits.shape[1] == target_bins:
+                # 可能是 [B, S, D, H, W] 或 [B, N, D, H, W]
+                b = depth_logits.shape[0]
+                if depth_logits.shape[1] == target_bins:
+                    # [B, D, H, W, ?] 或 [B, N, D, H, W]
+                    depth_logits = depth_logits.unsqueeze(1)  # 添加 S 维度
+                else:
+                    # [B, S, D, H, W]
+                    depth_logits = depth_logits.unsqueeze(2)  # 添加 N 维度
+        
+        if depth_logits.dim() != 6:
+            raise ValueError(f"depth_logits 必须是 6 维 [B, S, N, D, H, W]，但得到 {depth_logits.dim()} 维: {depth_logits.shape}")
+        
         b, s, n, d, h, w = depth_logits.shape
+        
+        if d == target_bins:
+            return depth_logits
+        
         reshaped = depth_logits.contiguous().view(b * s * n, 1, d, h, w)
         resized = F.interpolate(reshaped, size=(target_bins, h, w), mode="trilinear", align_corners=False)
         resized = resized.view(b, s, n, target_bins, h, w)
@@ -481,6 +569,35 @@ class streamingflow(nn.Module):
         if frames.dim() != 6:
             raise ValueError("事件帧需为[B, S, N, C, H, W]或[S, N, C, H, W]格式。")
         return frames.contiguous()
+
+    def _stack_event_time_to_channels(self, event_frames, expected_channels):
+        """
+        将事件帧的时间维度堆叠到通道维度，以匹配EVRT编码器的输入要求。
+        对每个(B, N)组合，将S个时间步的C通道堆叠成S*C通道。
+        
+        Args:
+            event_frames: [B, S, N, C, H, W] 其中C是每个时间步的通道数（BINS）
+            expected_channels: EVRT期望的输入通道数（IN_CHANNELS）
+        
+        Returns:
+            [B*N, expected_channels, H, W] 用于直接输入EVRT编码器
+        """
+        b, s, n, c, h, w = event_frames.shape
+        stacked_channels = s * c
+        
+        if stacked_channels != expected_channels:
+            raise ValueError(
+                f"时间步数S={s} × 通道数C={c} = {stacked_channels}，"
+                f"与期望通道数{expected_channels}不匹配。"
+                f"请检查TIME_RECEPTIVE_FIELD和EVENT.BINS配置。"
+            )
+        
+        # [B, S, N, C, H, W] -> [B, N, S, C, H, W] -> [B, N, S*C, H, W] -> [B*N, S*C, H, W]
+        event_frames = event_frames.permute(0, 2, 1, 3, 4, 5).contiguous()
+        event_frames = event_frames.view(b, n, stacked_channels, h, w)
+        event_frames = event_frames.view(b * n, stacked_channels, h, w)
+        
+        return event_frames
 
     def _prepare_event_frames(self, event_input, seq_len, device):
         if torch.is_tensor(event_input):
@@ -621,7 +738,32 @@ class streamingflow(nn.Module):
                 # flatten x
                 x_b = flow_b[t]
                 geometry_b = flow_geo[t]
-             
+                
+                # 调整 geometry_b 的空间维度以匹配 x_b（如果需要）
+                # 注意：图像分支中 geometry 和 camera_volume 的空间维度通常是一致的，
+                # 但事件分支中 event_volume 的空间维度可能与 geometry 不同（基于不同的编码器输出）
+                # x_b: [n, d, h_x, w_x, c]
+                # geometry_b: [n, d, h_geo, w_geo, 3]
+                n_geo, d_geo, h_geo, w_geo, _ = geometry_b.shape
+                n_x, d_x, h_x, w_x, _ = x_b.shape
+                
+                # 验证 n 和 d 维度应该匹配（如果不匹配说明有严重问题）
+                assert n_geo == n_x, f"Camera/event count mismatch: {n_geo} != {n_x}"
+                assert d_geo == d_x, f"Depth channel mismatch: {d_geo} != {d_x}"
+                
+                # 只有当空间维度不匹配时才进行调整（事件分支的情况）
+                # 图像分支通常不需要这个调整，因为 geometry 和 camera_volume 基于相同的图像配置
+                if h_geo != h_x or w_geo != w_x:
+                    # 将 geometry_b 从 [n, d, h_geo, w_geo, 3] 调整为 [n, d, h_x, w_x, 3]
+                    # 使用双线性插值：需要先 permute 为 [n, d, 3, h_geo, w_geo]，然后插值到 [n, d, 3, h_x, w_x]
+                    geometry_b_permuted = geometry_b.permute(0, 1, 4, 2, 3)  # [n, d, 3, h_geo, w_geo]
+                    geometry_b_resized = F.interpolate(
+                        geometry_b_permuted.reshape(n_geo * d_geo, 3, h_geo, w_geo),
+                        size=(h_x, w_x),
+                        mode='bilinear',
+                        align_corners=False
+                    )  # [n*d, 3, h_x, w_x]
+                    geometry_b = geometry_b_resized.reshape(n_geo, d_geo, 3, h_x, w_x).permute(0, 1, 3, 4, 2)  # [n, d, h_x, w_x, 3]
 
                 x_b, geometry_b = self.bev_pool(geometry_b.unsqueeze(0), x_b.unsqueeze(0))
  
@@ -668,12 +810,38 @@ class streamingflow(nn.Module):
         if event is not None and self.use_event:
             event_frames = self._prepare_event_frames(event, s, device=intrinsics.device)
             event_frames = event_frames[:, :s]
-            event_packed = pack_sequence_dim(event_frames)
-            event_feats, event_depth_logits = self.event_encoder_forward(event_packed)
-            event_feats = unpack_sequence_dim(event_feats, b, s)
+            
+            # 获取EVRT期望的输入通道数（直接使用配置的IN_CHANNELS，不再进行时间维度堆叠）
+            expected_channels = getattr(self.cfg.MODEL.EVENT, "IN_CHANNELS", 0)
+            if expected_channels <= 0:
+                bins = getattr(self.cfg.MODEL.EVENT, "BINS", 10)
+                expected_channels = 2 * bins
+            
+            # 直接reshape为 [B*S*N, C, H, W]，其中C是每个时间步的通道数（不再stacking）
+            b, s, n, c, h, w = event_frames.shape
+            if c != expected_channels:
+                raise ValueError(
+                    f"事件帧通道数C={c}与期望通道数{expected_channels}不匹配。"
+                    f"请检查EVENT.IN_CHANNELS和EVENT.BINS配置。"
+                )
+            
+            # [B, S, N, C, H, W] -> [B*S*N, C, H, W]
+            event_reshaped = event_frames.view(b * s * n, c, h, w)
+            
+            # 编码器前向传播: [B*S*N, C, H, W] -> [B*S*N, out_channels, H', W']
+            event_feats, event_depth_logits = self.event_encoder_forward(event_reshaped)
+            
+            # Validate event encoder outputs
+            _validate_tensor(event_feats, "event_feats from event_encoder_forward")
+            if event_depth_logits is not None:
+                _validate_tensor(event_depth_logits, "event_depth_logits from event_encoder_forward")
+            
+            # 恢复形状: [B*S*N, C, H, W] -> [B, S, N, C, H, W]
+            event_feats = event_feats.view(b, s, n, *event_feats.shape[1:])
 
             if event_depth_logits is not None:
-                event_depth_logits_out = unpack_sequence_dim(event_depth_logits, b, s)
+                # event_depth_logits 是 [B*S*N, D, H, W]，直接转换为 [B, S, N, D, H, W]
+                event_depth_logits_out = event_depth_logits.view(b, s, n, *event_depth_logits.shape[1:])
                 event_depth_logits_out = self._resize_event_depth_bins(event_depth_logits_out, self.depth_channels)
             else:
                 event_depth_logits_out = torch.zeros(
@@ -681,9 +849,21 @@ class streamingflow(nn.Module):
                     device=event_feats.device,
                     dtype=event_feats.dtype,
                 )
+            
+            # Validate inputs before processing
+            _validate_tensor(event_feats, "event_feats before _expand_features_with_depth")
+            _validate_tensor(event_depth_logits_out, "event_depth_logits_out before softmax")
+            
+            # Clamp logits to prevent overflow in softmax
+            event_depth_logits_out = torch.clamp(event_depth_logits_out, min=-50.0, max=50.0)
             event_depth_prob = event_depth_logits_out.softmax(dim=3)
+            _validate_tensor(event_depth_prob, "event_depth_prob after softmax")
+            
             event_volume = self._expand_features_with_depth(event_feats, event_depth_prob)
+            _validate_tensor(event_volume, "event_volume before BEV projection")
+            
             bev_event = self.projection_to_birds_eye_view(event_volume, geometry, future_egomotion)
+            _validate_tensor(bev_event, "bev_event after BEV projection")
             outputs["event"] = {
                 "bev": bev_event,
                 "depth": event_depth_logits_out,

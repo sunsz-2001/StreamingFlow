@@ -28,9 +28,29 @@ from mmdet.core import (
 __all__ = ["TransFusionHead"]
 
 
-def clip_sigmoid(x, eps=1e-4):
+def clip_sigmoid(x, eps=1e-3):
+    """Clip sigmoid output to [eps, 1-eps] for numerical stability.
+    
+    Using eps=1e-3 instead of 1e-4 to avoid extreme log values in loss computation.
+    """
     y = torch.clamp(x.sigmoid_(), min=eps, max=1 - eps)
     return y
+
+
+def _validate_tensor(tensor, name, allow_inf=False):
+    """Validate tensor for NaN/Inf values and raise error if found.
+    
+    Args:
+        tensor: Tensor to validate
+        name: Name for error message
+        allow_inf: If True, only check for NaN, not Inf
+    """
+    if torch.isnan(tensor).any():
+        stats = f"min={tensor.min().item():.6f}, max={tensor.max().item():.6f}, mean={tensor.mean().item():.6f}"
+        raise ValueError(f"NaN detected in {name}. Stats: {stats}, shape: {tensor.shape}")
+    if not allow_inf and torch.isinf(tensor).any():
+        stats = f"min={tensor.min().item():.6f}, max={tensor.max().item():.6f}, mean={tensor.mean().item():.6f}"
+        raise ValueError(f"Inf detected in {name}. Stats: {stats}, shape: {tensor.shape}")
 
 
 @HEADS.register_module()
@@ -120,14 +140,14 @@ class TransFusionHead(nn.Module):
             build_conv_layer(
                 dict(type="Conv2d"),
                 hidden_channel,
-                num_classes,
+                self.num_classes,
                 kernel_size=3,
                 padding=1,
                 bias=bias,
             )
         )
         self.heatmap_head = nn.Sequential(*layers)
-        self.class_encoding = nn.Conv1d(num_classes, hidden_channel, 1)
+        self.class_encoding = nn.Conv1d(self.num_classes, hidden_channel, 1)
 
         # transformer decoder layers for object query with LiDAR feature
         self.decoder = nn.ModuleList()
@@ -221,7 +241,10 @@ class TransFusionHead(nn.Module):
             list[dict]: Output results for tasks.
         """
         batch_size = inputs.shape[0]
+        _validate_tensor(inputs, "TransFusionHead inputs")
+        
         lidar_feat = self.shared_conv(inputs)
+        _validate_tensor(lidar_feat, "lidar_feat after shared_conv")
 
         #################################
         # image to BEV
@@ -235,6 +258,7 @@ class TransFusionHead(nn.Module):
         # image guided query initialization
         #################################
         dense_heatmap = self.heatmap_head(lidar_feat)
+        _validate_tensor(dense_heatmap, "dense_heatmap after heatmap_head")
         dense_heatmap_img = None
         heatmap = dense_heatmap.detach().sigmoid()
         padding = self.nms_kernel_size // 2
@@ -243,7 +267,11 @@ class TransFusionHead(nn.Module):
         local_max_inner = F.max_pool2d(
             heatmap, kernel_size=self.nms_kernel_size, stride=1, padding=0
         )
-        local_max[:, :, padding:(-padding), padding:(-padding)] = local_max_inner
+        if padding > 0:
+            local_max[:, :, padding:(-padding), padding:(-padding)] = local_max_inner
+        else:
+            # 当 nms_kernel_size=1 时，max_pool2d 输出与输入相同，直接赋值
+            local_max = local_max_inner.clone()
         ## for Pedestrian & Traffic_cone in nuScenes
         if self.test_cfg["dataset"] == "nuScenes":
             local_max[
@@ -439,6 +467,14 @@ class TransFusionHead(nn.Module):
         )  # decode the prediction to real world metric bbox
         bboxes_tensor = boxes_dict[0]["bboxes"]
         gt_bboxes_tensor = gt_bboxes_3d.tensor.to(score.device)
+        
+        # 确保预测bbox和GT bbox的维度一致（IoU计算需要）
+        # 如果预测bbox有速度信息（9维），只取前7维用于IoU计算
+        if bboxes_tensor.shape[-1] > 7:
+            bboxes_tensor = bboxes_tensor[:, :7]
+        if gt_bboxes_tensor.shape[-1] > 7:
+            gt_bboxes_tensor = gt_bboxes_tensor[:, :7]
+        
         # each layer should do label assign seperately.
         if self.auxiliary:
             num_layer = self.num_decoder_layers
@@ -612,12 +648,20 @@ class TransFusionHead(nn.Module):
         preds_dict = preds_dicts[0][0]
         loss_dict = dict()
 
+        # Validate inputs before loss computation
+        _validate_tensor(preds_dict["dense_heatmap"], "dense_heatmap before loss")
+        _validate_tensor(heatmap, "heatmap target")
+        
         # compute heatmap loss
+        dense_heatmap_clipped = clip_sigmoid(preds_dict["dense_heatmap"])
+        _validate_tensor(dense_heatmap_clipped, "dense_heatmap after clip_sigmoid")
+        
         loss_heatmap = self.loss_heatmap(
-            clip_sigmoid(preds_dict["dense_heatmap"]),
+            dense_heatmap_clipped,
             heatmap,
             avg_factor=max(heatmap.eq(1).float().sum().item(), 1),
         )
+        _validate_tensor(loss_heatmap, "loss_heatmap", allow_inf=True)
         loss_dict["loss_heatmap"] = loss_heatmap
 
         # compute loss for each layer
@@ -642,12 +686,87 @@ class TransFusionHead(nn.Module):
                 idx_layer * self.num_proposals : (idx_layer + 1) * self.num_proposals,
             ]
             layer_cls_score = layer_score.permute(0, 2, 1).reshape(-1, self.num_classes)
-            layer_loss_cls = self.loss_cls(
-                layer_cls_score,
-                layer_labels,
-                layer_label_weights,
-                avg_factor=max(num_pos, 1),
-            )
+            # Convert labels to one-hot encoding for GaussianFocalLoss
+            # Labels can be in range [0, num_classes], where num_classes indicates background
+            # For one-hot conversion, clamp to [0, num_classes-1] and set background (num_classes) to all zeros
+            layer_labels_clamped = torch.clamp(layer_labels, min=0, max=self.num_classes - 1)
+            layer_labels_onehot = F.one_hot(layer_labels_clamped, num_classes=self.num_classes).float()
+            # Set background class (where original label == num_classes) to all zeros
+            background_mask = (layer_labels == self.num_classes)
+            layer_labels_onehot[background_mask] = 0.0
+            # Expand label_weights to match loss shape [B*num_proposals, num_classes]
+            # GaussianFocalLoss returns loss of shape [B*num_proposals, num_classes]
+            layer_label_weights_expanded = layer_label_weights.unsqueeze(1).expand(-1, self.num_classes)
+            # Validate inputs before loss computation
+            _validate_tensor(layer_cls_score, f"layer_cls_score at layer {idx_layer}")
+            _validate_tensor(layer_labels_onehot, f"layer_labels_onehot at layer {idx_layer}")
+            
+            # Check num_pos before loss computation
+            if torch.isnan(torch.tensor(num_pos, dtype=torch.float32)).any() or torch.isinf(torch.tensor(num_pos, dtype=torch.float32)).any():
+                raise ValueError(f"num_pos is NaN/Inf at layer {idx_layer}: {num_pos}")
+            if num_pos < 0:
+                raise ValueError(f"num_pos is negative at layer {idx_layer}: {num_pos}")
+            
+            avg_factor = max(num_pos, 1)
+            
+            # Check loss function type and inspect its forward signature
+            loss_cls_type = type(self.loss_cls).__name__
+            loss_cls_module = type(self.loss_cls).__module__
+            
+            # Prepare input for loss function
+            # Based on CenterHead implementation, GaussianFocalLoss expects sigmoid probabilities
+            # Apply clip_sigmoid to convert logits to probabilities with numerical stability
+            layer_cls_score_sigmoid = clip_sigmoid(layer_cls_score)
+            _validate_tensor(layer_cls_score_sigmoid, f"layer_cls_score_sigmoid at layer {idx_layer}")
+            
+            # Check loss function type and inspect its forward signature
+            try:
+                # Inspect the loss function's forward method to understand expected inputs
+                import inspect
+                sig = inspect.signature(self.loss_cls.forward)
+                forward_params = list(sig.parameters.keys())
+                
+                # Call loss function with sigmoid probabilities (matching CenterHead usage)
+                # GaussianFocalLoss typically expects probabilities in [eps, 1-eps] range
+                layer_loss_cls = self.loss_cls(
+                    layer_cls_score_sigmoid,
+                    layer_labels_onehot,
+                    layer_label_weights_expanded,
+                    avg_factor=avg_factor,
+                )
+            except Exception as e:
+                raise RuntimeError(
+                    f"Error computing loss_cls at layer {idx_layer}. "
+                    f"loss_cls type: {loss_cls_type} (from {loss_cls_module}), "
+                    f"forward params: {forward_params if 'forward_params' in locals() else 'unknown'}, "
+                    f"layer_cls_score shape: {layer_cls_score.shape}, dtype: {layer_cls_score.dtype}, "
+                    f"layer_labels_onehot shape: {layer_labels_onehot.shape}, dtype: {layer_labels_onehot.dtype}, "
+                    f"layer_label_weights_expanded shape: {layer_label_weights_expanded.shape}, dtype: {layer_label_weights_expanded.dtype}, "
+                    f"avg_factor: {avg_factor}. "
+                    f"Original error: {e}"
+                ) from e
+            
+            # Enhanced validation with diagnostic info
+            if torch.isnan(layer_loss_cls).any() or torch.isinf(layer_loss_cls).any():
+                stats_cls = f"min={layer_cls_score.min().item():.6f}, max={layer_cls_score.max().item():.6f}, mean={layer_cls_score.mean().item():.6f}"
+                stats_labels = f"min={layer_labels_onehot.min().item():.6f}, max={layer_labels_onehot.max().item():.6f}, mean={layer_labels_onehot.mean().item():.6f}"
+                # Convert to float for mean calculation if needed
+                weights_float = layer_label_weights_expanded.float() if layer_label_weights_expanded.dtype != torch.float32 else layer_label_weights_expanded
+                stats_weights = f"min={weights_float.min().item():.6f}, max={weights_float.max().item():.6f}, mean={weights_float.mean().item():.6f}"
+                
+                # Check if loss is scalar or tensor
+                loss_shape = layer_loss_cls.shape if hasattr(layer_loss_cls, 'shape') else 'scalar'
+                loss_value = layer_loss_cls.item() if layer_loss_cls.numel() == 1 else f"tensor with shape {loss_shape}"
+                
+                raise ValueError(
+                    f"NaN/Inf detected in layer_loss_cls at layer {idx_layer}. "
+                    f"Loss value: {loss_value}, loss_cls type: {loss_cls_type} (from {loss_cls_module}). "
+                    f"num_pos={num_pos}, avg_factor={avg_factor}. "
+                    f"layer_cls_score: {stats_cls}, shape={layer_cls_score.shape}. "
+                    f"layer_labels_onehot: {stats_labels}, shape={layer_labels_onehot.shape}. "
+                    f"layer_label_weights_expanded: {stats_weights}, shape={layer_label_weights_expanded.shape}, dtype={layer_label_weights_expanded.dtype}. "
+                    f"This suggests the loss function implementation may have numerical instability issues."
+                )
 
             layer_center = preds_dict["center"][
                 ...,
@@ -696,9 +815,14 @@ class TransFusionHead(nn.Module):
                 idx_layer * self.num_proposals : (idx_layer + 1) * self.num_proposals,
                 :,
             ]
+            # Validate inputs before loss computation
+            _validate_tensor(preds, f"preds at layer {idx_layer}")
+            _validate_tensor(layer_bbox_targets, f"layer_bbox_targets at layer {idx_layer}")
+            
             layer_loss_bbox = self.loss_bbox(
                 preds, layer_bbox_targets, layer_reg_weights, avg_factor=max(num_pos, 1)
             )
+            _validate_tensor(layer_loss_bbox, f"layer_loss_bbox at layer {idx_layer}", allow_inf=True)
 
             # layer_iou = preds_dict['iou'][..., idx_layer*self.num_proposals:(idx_layer+1)*self.num_proposals].squeeze(1)
             # layer_iou_target = ious[..., idx_layer*self.num_proposals:(idx_layer+1)*self.num_proposals]

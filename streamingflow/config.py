@@ -66,6 +66,7 @@ _C.DATASET.EVENTS_FILE_SUFFIX = '.npz'
 _C.DATASET.EVENTS_NORMALIZATION = 255.0
 _C.DATASET.EVENTS_FALLBACK_ZERO = True
 _C.DATASET.EVENT_CAMERAS = []
+_C.DATASET.USE_FLOW_DATA = True  # 是否使用流式数据格式（将事件序列分割为时间窗口）
 
 
 _C.TIME_RECEPTIVE_FIELD = 3  # how many frames of temporal context (1 for single timeframe)
@@ -143,6 +144,8 @@ _C.MODEL.EVENT.NORMALIZE = False
 _C.MODEL.EVENT.USE_DEPTH_HEAD = True
 _C.MODEL.EVENT.DEPTH_BINS = 80
 _C.MODEL.EVENT.DEPTH_HEAD_CHANNELS = 128
+_C.MODEL.EVENT.INPUT_SIZE = [0, 0]  # [H, W], if [0, 0] -> use IMAGE.FINAL_DIM
+_C.MODEL.EVENT.DOWNSAMPLE = 8  # Event encoder downsampling rate (fixed for EventEncoderEvRT)
 
 
 
@@ -223,6 +226,20 @@ _C.PLANNING.GRU_STATE_SIZE = 64
 _C.PLANNING.SAMPLE_NUM = 600
 _C.PLANNING.COMMAND = ['LEFT', 'FORWARD', 'RIGHT']
 
+_C.DETECTION = CN()
+_C.DETECTION.ENABLED = False
+_C.DETECTION.NUM_CLASSES = 4
+_C.DETECTION.NUM_PROPOSALS = 128
+_C.DETECTION.HIDDEN_CHANNEL = 128
+_C.DETECTION.NUM_DECODER_LAYERS = 3
+_C.DETECTION.NUM_HEADS = 8
+_C.DETECTION.NMS_KERNEL_SIZE = 1
+_C.DETECTION.FFN_CHANNEL = 256
+_C.DETECTION.DROPOUT = 0.1
+_C.DETECTION.AUXILIARY = True
+_C.DETECTION.OUT_SIZE_FACTOR = 8
+_C.DETECTION.DATASET = 'dsec'  # dataset name for test_cfg
+
 _C.FUTURE_DISCOUNT = 0.95
 
 _C.OPTIMIZER = CN()
@@ -264,4 +281,9 @@ def get_cfg(args=None, cfg_dict=None):
             cfg.merge_from_file(args.config_file)
         cfg.merge_from_list(args.opts)
         # cfg.freeze()
+    
+    # 处理 None 值：将 DATASET.CAMERA_WINDOW_SEC 的 None 转换为空字符串
+    if hasattr(cfg.DATASET, 'CAMERA_WINDOW_SEC') and cfg.DATASET.CAMERA_WINDOW_SEC is None:
+        cfg.DATASET.CAMERA_WINDOW_SEC = ''
+    
     return cfg
