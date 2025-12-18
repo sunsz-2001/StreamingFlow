@@ -216,7 +216,7 @@ def export_and_eval(_cfg_path: str, checkpoint: str, dataroot: str, iou_thr: flo
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Export DSEC detection predictions and compute mAP (IoU-based).")
-    parser.add_argument("--config-file", default="streamingflow/configs/dsec_event_lidar.yaml", help="Path to config file. Use dsec_event_lidar.yaml for event+lidar fusion, or dsec_event.yaml for event-only.")
+    parser.add_argument("--config-file", default="/home/user/sunsz/StreamingFlow/streamingflow/configs/dsec_event.yaml", help="Path to config file. Use dsec_event_lidar.yaml for event+lidar fusion, or dsec_event.yaml for event-only.")
     parser.add_argument("--checkpoint", default='/home/user/sunsz/StreamingFlow/logs/dsec_event_eval/epoch=99-step=26199.ckpt', help="Path to model checkpoint (.ckpt).")
     parser.add_argument("--dataroot", default='/media/switcher/sda/datasets/dsec', help="Path to DSEC dataset root.")
     parser.add_argument("--iou-thr", type=float, default=0.5, help="IoU threshold for AP.")

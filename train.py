@@ -48,14 +48,35 @@ def main():
     model = TrainingModule(cfg.convert_to_dict())
 
     if cfg.PRETRAINED.LOAD_WEIGHTS:
-        # Load single-image instance segmentation model.
-        pretrained_model_weights = torch.load(
-            cfg.PRETRAINED.PATH, map_location='cpu'
-        )['state_dict']
-        state = model.state_dict()
-        pretrained_model_weights = {k: v for k, v in pretrained_model_weights.items() if k in state and 'decoder' not in k}
-        model.load_state_dict(pretrained_model_weights, strict=False)
-        print(f'Loaded single-image model weights from {cfg.PRETRAINED.PATH}')
+        # 加载预训练权重；仅加载在当前模型中存在且形状兼容的参数
+        ckpt = torch.load(cfg.PRETRAINED.PATH, map_location='cpu')
+        if 'state_dict' not in ckpt:
+            raise RuntimeError(f"Checkpoint at {cfg.PRETRAINED.PATH} has no 'state_dict' key.")
+
+        pretrained_state = ckpt['state_dict']
+        current_state = model.state_dict()
+
+        filtered_state = {}
+        for k, v in pretrained_state.items():
+            # 跳过 decoder，以避免任务头不一致的问题（沿用原有逻辑）
+            if 'decoder' in k:
+                continue
+            # 跳过 frustum：它由当前配置计算得到，形状依赖分辨率，不能直接从旧 ckpt 复制
+            if k.endswith('model.frustum') or '.frustum' in k:
+                continue
+            if k not in current_state:
+                continue
+            if current_state[k].shape != v.shape:
+                # 严格避免形状不匹配导致的隐性错误
+                continue
+            filtered_state[k] = v
+
+        missing_keys, unexpected_keys = model.load_state_dict(filtered_state, strict=False)
+        print(f"Loaded pretrained weights from {cfg.PRETRAINED.PATH}")
+        if missing_keys:
+            print(f"Missing keys (not loaded, kept init): {len(missing_keys)}")
+        if unexpected_keys:
+            print(f"Unexpected keys in checkpoint (ignored): {len(unexpected_keys)}")
 
     save_dir = os.path.join(
         cfg.LOG_DIR, cfg.TAG

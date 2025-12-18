@@ -177,7 +177,91 @@ class streamingflow(nn.Module):
             )
 
         if self.use_lidar:          
-            encoders = {'lidar': {'voxelize': {'max_num_points': 10, 'point_cloud_range': [-50.0, -50.0, -5.0, 50.0, 50.0, 3.0], 'voxel_size': [0.0625, 0.0625, 0.2], 'max_voxels': [120000, 160000]}, 'backbone': {'type': 'SparseEncoder', 'in_channels': 5, 'sparse_shape': [1600, 1600, 41], 'output_channels': 128, 'order': ['conv', 'norm', 'act'], 'encoder_channels': [[16, 16, 32], [32, 32, 64], [64, 64, 128], [128, 128]], 'encoder_paddings': [[0, 0, 1], [0, 0, 1], [0, 0, [1, 1, 0]], [0, 0]], 'block_type': 'basicblock'}}, 'temporal_model': {'type': 'Temporal3DConvModel', 'receptive_field': 3, 'input_egopose': True, 'in_channels': 256, 'input_shape': [200, 200], 'with_skip_connect': True, 'start_out_channels': 256, 'det_grid_conf': {'xbound': [-54.0, 54.0, 0.6], 'ybound': [-54.0, 54.0, 0.6], 'zbound': [-10.0, 10.0, 20.0], 'dbound': [1.0, 60.0, 1.0]}, 'grid_conf': {'xbound': [-50.0, 50.0, 0.5], 'ybound': [-50.0, 50.0, 0.5], 'zbound': [-10.0, 10.0, 20.0], 'dbound': [1.0, 60.0, 1.0]}}}
+            # DSEC 点云为 (N, 4) [x, y, z, intensity]，因此 SparseEncoder 的 in_channels 设为 4
+            if True:  # 当前激活的配置
+                encoders = {
+                    'lidar': {
+                        'voxelize': {
+                            'max_num_points': 10,
+                            'point_cloud_range': [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0],
+                            'voxel_size': [0.1, 0.1, 0.2],
+                            'max_voxels': [90000, 120000],
+                        },
+                        'backbone': {
+                            'type': 'SparseEncoder',
+                            'in_channels': 4,  # 与 DSEC 点云通道数对齐
+                            'sparse_shape': [1024, 1024, 41],
+                            'output_channels': 128,
+                            'order': ['conv', 'norm', 'act'],
+                            'encoder_channels': [[16, 16, 32], [32, 32, 64], [64, 64, 128], [128, 128]],
+                            'encoder_paddings': [[0, 0, 1], [0, 0, 1], [0, 0, [1, 1, 0]], [0, 0]],
+                            'block_type': 'basicblock',
+                        },
+                    },
+                    'temporal_model': {
+                        'type': 'Temporal3DConvModel',
+                        'receptive_field': 3,
+                        'input_egopose': True,
+                        'in_channels': 256,
+                        'input_shape': [128, 128],
+                        'with_skip_connect': True,
+                        'start_out_channels': 256,
+                        'det_grid_conf': {
+                            'xbound': [-54.0, 54.0, 0.6],
+                            'ybound': [-54.0, 54.0, 0.6],
+                            'zbound': [-10.0, 10.0, 20.0],
+                            'dbound': [1.0, 60.0, 1.0],
+                        },
+                        'grid_conf': {
+                            'xbound': [-51.2, 51.2, 0.8],
+                            'ybound': [-51.2, 51.2, 0.8],
+                            'zbound': [-10.0, 10.0, 20.0],
+                            'dbound': [1.0, 60.0, 1.0],
+                        },
+                    },
+                }
+            else:  # 未激活的配置
+                encoders = {
+                    'lidar': {
+                        'voxelize': {
+                            'max_num_points': 10,
+                            'point_cloud_range': [-50.0, -50.0, -5.0, 50.0, 50.0, 3.0],
+                            'voxel_size': [0.0625, 0.0625, 0.2],
+                            'max_voxels': [120000, 160000],
+                        },
+                        'backbone': {
+                            'type': 'SparseEncoder',
+                            'in_channels': 4,  # 与 DSEC 点云通道数对齐
+                            'sparse_shape': [1600, 1600, 41],
+                            'output_channels': 128,
+                            'order': ['conv', 'norm', 'act'],
+                            'encoder_channels': [[16, 16, 32], [32, 32, 64], [64, 64, 128], [128, 128]],
+                            'encoder_paddings': [[0, 0, 1], [0, 0, 1], [0, 0, [1, 1, 0]], [0, 0]],
+                            'block_type': 'basicblock',
+                        },
+                    },
+                    'temporal_model': {
+                        'type': 'Temporal3DConvModel',
+                        'receptive_field': 3,
+                        'input_egopose': True,
+                        'in_channels': 256,
+                        'input_shape': [200, 200],
+                        'with_skip_connect': True,
+                        'start_out_channels': 256,
+                        'det_grid_conf': {
+                            'xbound': [-54.0, 54.0, 0.6],
+                            'ybound': [-54.0, 54.0, 0.6],
+                            'zbound': [-10.0, 10.0, 20.0],
+                            'dbound': [1.0, 60.0, 1.0],
+                        },
+                        'grid_conf': {
+                            'xbound': [-50.0, 50.0, 0.5],
+                            'ybound': [-50.0, 50.0, 0.5],
+                            'zbound': [-10.0, 10.0, 20.0],
+                            'dbound': [1.0, 60.0, 1.0],
+                        },
+                    },
+                }
 
             self.encoders = nn.ModuleDict()
             if encoders["lidar"]["voxelize"].get("max_num_points", -1) > 0:
@@ -191,15 +275,32 @@ class streamingflow(nn.Module):
                 }
             )
             self.voxelize_reduce = encoders["lidar"].get("voxelize_reduce", True)
-            self.temporal_model_lidar = TemporalModel(
-                256,
-                self.receptive_field,
-                input_shape=self.bev_size,
-                start_out_channels=self.cfg.MODEL.TEMPORAL_MODEL.START_OUT_CHANNELS,
-                extra_in_channels=self.cfg.MODEL.TEMPORAL_MODEL.EXTRA_IN_CHANNELS,
-                n_spatial_layers_between_temporal_layers=self.cfg.MODEL.TEMPORAL_MODEL.INBETWEEN_LAYERS,
-                use_pyramid_pooling=self.cfg.MODEL.TEMPORAL_MODEL.PYRAMID_POOLING,
-            )   
+            # SparseEncoder 的实际输出通道数 = output_channels * D
+            # 其中 D 是深度维度经过 conv_out 下采样后的值
+            # 配置中 output_channels = 128，但实际输出是 256，说明 D = 2
+            # 所以实际输出通道数 = 128 * 2 = 256
+            lidar_backbone_output_channels = encoders["lidar"]["backbone"]["output_channels"]
+            # 计算 SparseEncoder 的实际输出通道数
+            # sparse_shape 的深度维度是 41，经过 conv_out 的 stride=(1,1,2) 下采样后约为 21
+            # 但实际输出是 256，说明可能是 128 * 2 = 256（D=2）
+            # 为了准确获取，我们需要从实际输出中获取，但这里我们使用已知的值 256
+            actual_lidar_output_channels = 256  # SparseEncoder 的实际输出通道数
+            
+            # 当 TIME_RECEPTIVE_FIELD = 1 时，n_temporal_layers = 0，self.model 为空
+            # 此时 start_out_channels 应该等于输入通道数，否则 final_conv 会报错
+            if self.receptive_field == 1:
+                # 当没有 temporal layers 时，start_out_channels 应该等于输入通道数
+                lidar_start_out_channels = actual_lidar_output_channels
+            else:
+                # 当有 temporal layers 时，使用配置文件的值
+                lidar_start_out_channels = self.cfg.MODEL.TEMPORAL_MODEL.START_OUT_CHANNELS
+            
+            # 注意：LiDAR 特征的空间尺寸可能与 BEV 网格尺寸不一致
+            # LiDAR encoder 的输出空间尺寸需要通过实际特征来确定
+            # 暂时使用 None，在第一次 forward 时动态确定
+            self.temporal_model_lidar = None
+            self._lidar_input_shape = None  # 将在第一次 forward 时确定
+            self._lidar_temporal_model_initialized = False   
 
         # Cost function
         # Carla 128, Nuscenes 256
@@ -300,23 +401,132 @@ class streamingflow(nn.Module):
         lidar_states = None
 
         if self.use_lidar:
-            points = torch.stack(points).permute(1,0,2,3) # B, T, num_point, C
-            B, T, num_point, C = points.shape
-            points = points.contiguous().view(B*T, num_point, C).to(torch.float32)
-            points = [points[i] for i in range(points.shape[0])]  
-
-            feature = self.extract_lidar_features(points)
-
-            # feature = self.bev_slicer(feature)
-
-            _, C, H_det, W_det = feature.shape
-
-            x = feature.view(B, T, C, H_det, W_det)
+            # 将 DataLoader 提供的点云列表标准化为张量列表，兼容 numpy 数组与张量输入
+            # 注意：points 可能是两种格式：
+            # 1. list[Tensor]：每个样本一个点云（TIME_RECEPTIVE_FIELD=1）
+            # 2. list[list[Tensor]]：每个样本多个时间步的点云（TIME_RECEPTIVE_FIELD>1）
             
+            if isinstance(points, list) and len(points) > 0:
+                # 先检查第一个元素是否是列表（多时间步格式）
+                first_point = points[0]
+                if isinstance(first_point, (list, tuple)):
+                    # 格式2：points = [[t0_pc, t1_pc, t2_pc], [t0_pc, t1_pc, t2_pc], ...]
+                    # 已经是多时间步格式，跳过标准化，直接进入多时间步处理
+                    # 但需要确保内部的点云都是 Tensor 格式
+                    norm_points = []
+                    for sample_idx, sample_points in enumerate(points):
+                        if not isinstance(sample_points, (list, tuple)):
+                            raise TypeError(
+                                f"Expected points[{sample_idx}] to be list/tuple of point clouds, "
+                                f"but got {type(sample_points)}"
+                            )
+                        norm_sample_points = []
+                        for t, pc in enumerate(sample_points):
+                            if isinstance(pc, np.ndarray):
+                                pc = torch.from_numpy(pc)
+                            if not torch.is_tensor(pc):
+                                raise TypeError(
+                                    f"Expected point cloud at sample[{sample_idx}][{t}] to be Tensor or np.ndarray, "
+                                    f"but got {type(pc)}"
+                                )
+                            norm_sample_points.append(pc.to(dtype=torch.float32))
+                        norm_points.append(norm_sample_points)
+                    points = norm_points
+                else:
+                    # 格式1：points = [pc0, pc1, pc2, ...]（每个样本一个点云）
+                    # 需要标准化为 Tensor 列表
+                    norm_points = []
+                    for idx, p in enumerate(points):
+                        if isinstance(p, np.ndarray):
+                            p = torch.from_numpy(p)
+                        if not torch.is_tensor(p):
+                            raise TypeError(
+                                f"Expected points[{idx}] to be Tensor or np.ndarray, "
+                                f"but got {type(p)}"
+                            )
+                        norm_points.append(p.to(dtype=torch.float32))
+                    points = norm_points
+            elif torch.is_tensor(points):
+                # 单个样本的点云，封装为列表以统一接口
+                points = [points.to(dtype=torch.float32)]
+            else:
+                raise TypeError(
+                    f"Expected points to be list[Tensor], list[list[Tensor]], or Tensor, but got {type(points)}"
+                )
+
+            # points: List[Tensor(N_i, C)] 或 List[List[Tensor(N_i, C)]]
+            # 长度为 B（batch size）
+            # 每个元素可能是一个点云（TIME_RECEPTIVE_FIELD=1）或点云列表（TIME_RECEPTIVE_FIELD>1）
+            T = self.receptive_field
             
+            # 检查 points 的格式：是 [batch 中的点云列表] 还是 [batch 中的多时间步点云列表]
+            first_point = points[0]
+            if isinstance(first_point, list):
+                # 格式：points = [[t0_pc, t1_pc, t2_pc], [t0_pc, t1_pc, t2_pc], ...]
+                # 每个样本有 T 个时间步的点云
+                B = len(points)
+                # 按时间步处理：对每个时间步，提取所有 batch 样本的点云
+                features = []
+                for t in range(T):
+                    # 提取所有 batch 样本在时间步 t 的点云
+                    points_t = [sample_points[t] if t < len(sample_points) else sample_points[-1] 
+                               for sample_points in points]
+                    # 标准化点云格式
+                    norm_points_t = []
+                    for p in points_t:
+                        if isinstance(p, np.ndarray):
+                            p = torch.from_numpy(p)
+                        if not torch.is_tensor(p):
+                            raise TypeError(f"Expected point cloud to be Tensor or np.ndarray, but got {type(p)}")
+                        norm_points_t.append(p.to(dtype=torch.float32))
+                    # 对时间步 t 的所有 batch 样本进行特征提取
+                    feature_t = self.extract_lidar_features(norm_points_t)  # [B, C, H, W]
+                    features.append(feature_t)
+                # 堆叠所有时间步：[B, T, C, H, W]
+                x = torch.stack(features, dim=1)  # [B, T, C, H, W]
+            else:
+                # 格式：points = [pc0, pc1, pc2, ...]（每个样本一个点云，TIME_RECEPTIVE_FIELD=1）
+                B = len(points)
+                # voxelize + 稀疏卷积编码，返回 [B, C, H_det, W_det]
+                feature = self.extract_lidar_features(points)
+                _, C, H_det, W_det = feature.shape
+                # 显式恢复时间维度，形状 [B, T, C, H, W]
+                # 当 T=1 时，直接添加时间维度
+                x = feature.unsqueeze(1)  # [B, 1, C, H, W]
+
+            # 延迟初始化 temporal_model_lidar：使用实际的 LiDAR 特征空间尺寸
+            if not self._lidar_temporal_model_initialized:
+                # 从实际特征中获取空间尺寸
+                _, _, _, H_actual, W_actual = x.shape
+                actual_lidar_input_shape = (H_actual, W_actual)
+                
+                # 计算实际的输出通道数
+                actual_lidar_output_channels = x.shape[2]  # C
+                
+                # 确定 start_out_channels
+                if self.receptive_field == 1:
+                    lidar_start_out_channels = actual_lidar_output_channels
+                else:
+                    lidar_start_out_channels = self.cfg.MODEL.TEMPORAL_MODEL.START_OUT_CHANNELS
+                
+                # 初始化 temporal_model_lidar
+                self.temporal_model_lidar = TemporalModel(
+                    actual_lidar_output_channels,
+                    self.receptive_field,
+                    input_shape=actual_lidar_input_shape,  # 使用实际的空间尺寸
+                    start_out_channels=lidar_start_out_channels,
+                    extra_in_channels=self.cfg.MODEL.TEMPORAL_MODEL.EXTRA_IN_CHANNELS,
+                    n_spatial_layers_between_temporal_layers=self.cfg.MODEL.TEMPORAL_MODEL.INBETWEEN_LAYERS,
+                    use_pyramid_pooling=self.cfg.MODEL.TEMPORAL_MODEL.PYRAMID_POOLING,
+                )
+                self._lidar_temporal_model_initialized = True
+                self._lidar_input_shape = actual_lidar_input_shape
+                
+                # 将模型移到正确的设备
+                if next(self.parameters()).is_cuda:
+                    self.temporal_model_lidar = self.temporal_model_lidar.cuda()
+
             lidar_states = self.temporal_model_lidar(x)
-
-            states = lidar_states
 
         if not self.use_camera and not self.use_event:
             raise ValueError("At least one of USE_CAMERA or USE_EVENT must be True.")
@@ -402,7 +612,64 @@ class streamingflow(nn.Module):
             bev_sequence = torch.cat([bev_sequence, future_egomotions_spatial], dim=-3)
 
         camera_states = self.temporal_model(bev_sequence)
-        states = camera_states
+        
+        # 确定标准空间尺寸和通道数
+        standard_spatial_size = self.bev_size  # (200, 200) - BEV 网格尺寸
+        standard_channels = self.future_pred_in_channels  # 64 - 标准通道数
+        
+        # 统一 camera_states 的空间尺寸和通道数
+        if camera_states is not None:
+            B, T, C, H, W = camera_states.shape
+            # 通道对齐
+            if C != standard_channels:
+                projection_key = f'camera_states_std_projection_{C}_to_{standard_channels}'
+                if not hasattr(self, 'standard_projections'):
+                    self.standard_projections = nn.ModuleDict()
+                if projection_key not in self.standard_projections:
+                    self.standard_projections[projection_key] = nn.Conv2d(C, standard_channels, 1).to(camera_states.device)
+                camera_states = self.standard_projections[projection_key](
+                    camera_states.view(B * T, C, H, W)
+                ).view(B, T, standard_channels, H, W)
+            # 空间对齐
+            if (H, W) != standard_spatial_size:
+                camera_states = torch.nn.functional.interpolate(
+                    camera_states.view(B * T, standard_channels, H, W),
+                    size=standard_spatial_size,
+                    mode='bilinear',
+                    align_corners=False
+                ).view(B, T, standard_channels, *standard_spatial_size)
+        
+        # 统一 lidar_states 的空间尺寸和通道数
+        if lidar_states is not None:
+            B, T, C, H, W = lidar_states.shape
+            # 通道对齐
+            if C != standard_channels:
+                projection_key = f'lidar_states_std_projection_{C}_to_{standard_channels}'
+                if not hasattr(self, 'standard_projections'):
+                    self.standard_projections = nn.ModuleDict()
+                if projection_key not in self.standard_projections:
+                    self.standard_projections[projection_key] = nn.Conv2d(C, standard_channels, 1).to(lidar_states.device)
+                lidar_states = self.standard_projections[projection_key](
+                    lidar_states.view(B * T, C, H, W)
+                ).view(B, T, standard_channels, H, W)
+            # 空间对齐
+            if (H, W) != standard_spatial_size:
+                lidar_states = torch.nn.functional.interpolate(
+                    lidar_states.view(B * T, standard_channels, H, W),
+                    size=standard_spatial_size,
+                    mode='bilinear',
+                    align_corners=False
+                ).view(B, T, standard_channels, *standard_spatial_size)
+        
+        # 设置 states：优先使用 camera_states（包含 event 融合后的结果）
+        # 但保留 lidar_states 不被覆盖，以便 FuturePredictionODE 进行异步融合
+        # 现在 camera_states 和 lidar_states 都已经统一到标准尺寸
+        if camera_states is not None:
+            states = camera_states
+        elif lidar_states is not None:
+            states = lidar_states
+        else:
+            raise RuntimeError("Both camera_states and lidar_states are None. At least one modality must be available.")
 
         # Optional: build high-frequency camera states (single-frame lifting as ODE observations)
         camera_states_hi = None
@@ -428,23 +695,85 @@ class streamingflow(nn.Module):
 
         if self.n_future > 0:
             # 保存过去帧（用于后续拼接）
-            past_states = states  # [B, TIME_RECEPTIVE_FIELD, C, H, W]
+            # 注意：past_states 使用 states（可能是 camera_states 或 lidar_states）
+            # future_states 将通过 FuturePredictionODE 从 camera_states 和 lidar_states 异步融合得到
+            # 这样 past_states 和 future_states 可能信息不一致，但这是异步融合的设计：
+            # - past_states: 过去帧的单一模态或融合后的状态
+            # - future_states: 通过 NODE 从多模态异步观测预测的未来状态
+            # 
+            # 【关键】现在 camera_states 和 lidar_states 已经在 temporal_model 之后统一到标准尺寸
+            # 因此 past_states 和 future_states 的空间尺寸已经一致，不需要再次对齐
+            past_states = states  # [B, TIME_RECEPTIVE_FIELD, C, H, W] - 已经是标准尺寸
             
             present_state = states[:, -1:].contiguous()
-        
-            future_prediction_input = present_state # not used actually
+            future_prediction_input = present_state  # 已经是标准尺寸，不需要对齐
+            
+            # camera_states 和 lidar_states 已经在 temporal_model 之后统一到标准尺寸
+            # 直接使用，不需要再次对齐
+            camera_states_for_ode = camera_states  # 已经是标准尺寸
+            lidar_states_for_ode = lidar_states   # 已经是标准尺寸
             
             # NODE 输出未来帧
+            # FuturePredictionODE 会接收 camera_states 和 lidar_states 及其时间戳，
+            # 按时间戳排序后进行异步融合和预测
+            # 注意：camera_states 和 lidar_states 已经统一到标准尺寸，空间尺寸一致
             future_states, auxilary_loss = self.future_prediction_ode(
-                future_prediction_input,
-                camera_states,
-                lidar_states,
+                future_prediction_input,  # 已经是标准尺寸
+                camera_states_for_ode,    # 已经是标准尺寸
+                lidar_states_for_ode,     # 已经是标准尺寸
                 camera_timestamp,
                 lidar_timestamp,
                 target_timestamp,
                 camera_states_hi=camera_states_hi,
                 camera_timestamp_hi=camera_timestamp_hi,
             )
+            
+            # 确保 past_states 和 future_states 的通道数和空间尺寸匹配
+            # 【关键】由于已经在 temporal_model 之后统一了尺寸，past_states 和 future_states 应该已经匹配
+            # 但为了安全，仍然检查并处理不匹配的情况
+            past_states_channels = past_states.shape[2]
+            future_states_channels = future_states.shape[2]
+            past_states_spatial = (past_states.shape[3], past_states.shape[4])
+            future_states_spatial = (future_states.shape[3], future_states.shape[4])
+            
+            # 检查空间尺寸是否匹配
+            if past_states_spatial != future_states_spatial:
+                # 空间尺寸不匹配，需要对齐 future_states 到 past_states 的尺寸
+                B_fut, T_fut, C_fut, H_fut, W_fut = future_states.shape
+                future_states = torch.nn.functional.interpolate(
+                    future_states.view(B_fut * T_fut, C_fut, H_fut, W_fut),
+                    size=past_states_spatial,
+                    mode='bilinear',
+                    align_corners=False
+                ).view(B_fut, T_fut, C_fut, *past_states_spatial)
+            
+            # 检查通道数是否匹配
+            if past_states_channels != future_states_channels:
+                # 通道数不匹配，需要投影
+                # 使用 1x1 卷积进行通道数对齐
+                # 动态创建投影层（延迟初始化，避免在 __init__ 中处理复杂的条件逻辑）
+                projection_key = f'past_states_projection_{past_states_channels}_to_{future_states_channels}'
+                if not hasattr(self, 'past_states_projections'):
+                    # 初始化投影层字典
+                    self.past_states_projections = nn.ModuleDict()
+                
+                if projection_key not in self.past_states_projections:
+                    # 创建新的投影层并注册为模块
+                    projection = nn.Conv2d(
+                        past_states_channels,
+                        future_states_channels,
+                        kernel_size=1,
+                        bias=False
+                    )
+                    # 使用 Xavier 初始化
+                    nn.init.xavier_uniform_(projection.weight)
+                    self.past_states_projections[projection_key] = projection
+                
+                # 投影 past_states: [B, T, C_old, H, W] -> [B, T, C_new, H, W]
+                B, T, C_old, H, W = past_states.shape
+                past_states_reshaped = past_states.view(B * T, C_old, H, W)
+                past_states_projected = self.past_states_projections[projection_key](past_states_reshaped)
+                past_states = past_states_projected.view(B, T, future_states_channels, H, W)
             
             # 拼接过去帧和未来帧: [B, TIME_RECEPTIVE_FIELD + n_future, C, H, W]
             states = torch.cat([past_states, future_states], dim=1)
@@ -467,6 +796,10 @@ class streamingflow(nn.Module):
     def get_geometry(self, intrinsics, extrinsics):
         """Calculate the (x, y, z) 3D position of the features.
         """
+        # Ensure intrinsics and extrinsics are float32 to match frustum dtype
+        intrinsics = intrinsics.float()
+        extrinsics = extrinsics.float()
+        
         rotation, translation = extrinsics[..., :3, :3], extrinsics[..., :3, 3]
         B, N, _ = translation.shape
         # Add batch, camera dimension, and a dummy dimension at the end
@@ -827,6 +1160,20 @@ class streamingflow(nn.Module):
             
             # [B, S, N, C, H, W] -> [B*S*N, C, H, W]
             event_reshaped = event_frames.view(b * s * n, c, h, w)
+            
+            # 【数值稳定性】裁剪输入数据，防止 Inf/NaN
+            # 事件数据可能包含异常大的值，需要裁剪到合理范围
+            # 使用较大的范围（-1000 到 1000）以保留大部分信息，但防止极端值
+            event_reshaped = torch.clamp(event_reshaped, min=-1000.0, max=1000.0)
+            
+            # 检查是否仍有 Inf/NaN（理论上不应该有，但作为安全检查）
+            if torch.isnan(event_reshaped).any() or torch.isinf(event_reshaped).any():
+                print(f"[WARNING] Event data contains NaN/Inf after clamping. Replacing with zeros.")
+                event_reshaped = torch.where(
+                    torch.isnan(event_reshaped) | torch.isinf(event_reshaped),
+                    torch.zeros_like(event_reshaped),
+                    event_reshaped
+                )
             
             # 编码器前向传播: [B*S*N, C, H, W] -> [B*S*N, out_channels, H', W']
             event_feats, event_depth_logits = self.event_encoder_forward(event_reshaped)

@@ -138,8 +138,151 @@ class TrainingModule(pl.LightningModule):
                 padded_voxel_points = batch['padded_voxel_points']
                 lidar_timestamps = batch['lidar_timestamp']
             else:
-                points = batch['points']
-                lidar_timestamps = batch['lidar_timestamp']
+                # 检查是否使用 flow_data 格式
+                use_flow_data = getattr(self.cfg.DATASET, 'USE_FLOW_DATA', False)
+                if use_flow_data and 'flow_data' in batch:
+                    # 从 flow_data 中提取点云数据
+                    # flow_data 是一个列表，每个元素对应一个样本
+                    # 每个样本的 flow_data 是一个列表，包含多个时间窗口
+                    # 每个时间窗口是一个字典，包含 flow_lidar（点云列表）
+                    flow_data_list = batch['flow_data']
+                    points = []
+                    lidar_timestamps_list = []
+                    
+                    for sample_idx, sample_flow_data in enumerate(flow_data_list):
+                        # sample_flow_data 是一个列表，包含多个时间窗口
+                        if isinstance(sample_flow_data, list) and len(sample_flow_data) > 0:
+                            # 从第一个时间窗口提取点云（通常包含初始点云）
+                            first_window = sample_flow_data[0]
+                            if isinstance(first_window, dict) and 'flow_lidar' in first_window:
+                                flow_lidar = first_window['flow_lidar']
+                                
+                                # 调试信息：检查 flow_lidar 的结构
+                                if sample_idx == 0:  # 只打印第一个样本的调试信息
+                                    print(f"[DEBUG] flow_lidar type: {type(flow_lidar)}")
+                                    print(f"[DEBUG] flow_lidar length: {len(flow_lidar) if isinstance(flow_lidar, (list, tuple)) else 'N/A'}")
+                                    if isinstance(flow_lidar, (list, tuple)) and len(flow_lidar) > 0:
+                                        print(f"[DEBUG] flow_lidar[0] type: {type(flow_lidar[0])}")
+                                        if hasattr(flow_lidar[0], 'shape'):
+                                            print(f"[DEBUG] flow_lidar[0] shape: {flow_lidar[0].shape}")
+                                        elif isinstance(flow_lidar[0], (list, tuple, np.ndarray)):
+                                            print(f"[DEBUG] flow_lidar[0] length/shape: {len(flow_lidar[0]) if isinstance(flow_lidar[0], (list, tuple)) else flow_lidar[0].shape}")
+                                
+                                if isinstance(flow_lidar, list) and len(flow_lidar) > 0:
+                                    # flow_lidar[0] 可能是单个点云，也可能是多个时间步点云的列表
+                                    first_lidar = flow_lidar[0]
+                                    
+                                    # 获取 TIME_RECEPTIVE_FIELD 以确定需要多少个时间步的点云
+                                    receptive_field = getattr(self.cfg, 'TIME_RECEPTIVE_FIELD', 1)
+                                    
+                                    # 检查 first_lidar 是否是列表（多时间步点云）
+                                    if isinstance(first_lidar, (list, tuple)):
+                                        # 多时间步点云列表：[pc_t-2, pc_t-1, pc_t]
+                                        # 需要提取所有时间步的点云，以支持 TIME_RECEPTIVE_FIELD > 1
+                                        sample_points = []  # 存储当前样本的所有时间步点云
+                                        
+                                        for t in range(min(len(first_lidar), receptive_field)):
+                                            pc_t = first_lidar[t]
+                                            # 确保是 numpy array 或 tensor
+                                            if isinstance(pc_t, np.ndarray):
+                                                pc_t = torch.from_numpy(pc_t)
+                                            elif not torch.is_tensor(pc_t):
+                                                raise TypeError(
+                                                    f"Expected point cloud at time step {t} to be numpy.ndarray or torch.Tensor, "
+                                                    f"but got {type(pc_t)}"
+                                                )
+                                            else:
+                                                pc_t = pc_t.to(dtype=torch.float32)
+                                            sample_points.append(pc_t)
+                                        
+                                        # 如果时间步数不足，用最后一个时间步填充
+                                        while len(sample_points) < receptive_field:
+                                            sample_points.append(sample_points[-1].clone() if torch.is_tensor(sample_points[-1]) else sample_points[-1])
+                                        
+                                        # 将多时间步点云列表添加到 points
+                                        points.append(sample_points)  # [[pc_t-2, pc_t-1, pc_t], ...]
+                                        
+                                        # 调试信息（仅第一个样本）
+                                        if sample_idx == 0:
+                                            print(f"[DEBUG] Extracted {len(sample_points)} time steps from flow_lidar[0]")
+                                            print(f"[DEBUG] Sample points shapes: {[pc.shape if hasattr(pc, 'shape') else 'N/A' for pc in sample_points]}")
+                                    else:
+                                        # 单个点云（TIME_RECEPTIVE_FIELD=1 的情况）
+                                        point_cloud = first_lidar
+                                        
+                                        # 确保是 torch.Tensor 格式
+                                        if isinstance(point_cloud, np.ndarray):
+                                            point_cloud = torch.from_numpy(point_cloud)
+                                        elif not torch.is_tensor(point_cloud):
+                                            raise TypeError(
+                                                f"Expected point_cloud to be numpy.ndarray or torch.Tensor, "
+                                                f"but got {type(point_cloud)}. flow_lidar structure may be incorrect."
+                                            )
+                                        else:
+                                            point_cloud = point_cloud.to(dtype=torch.float32)
+                                        
+                                        points.append(point_cloud)  # 单个点云
+                                    
+                                    # 提取时间戳（需要归一化，与 camera_timestamp 一致）
+                                    if 'lidar_stmp' in first_window:
+                                        lidar_stmp = first_window['lidar_stmp']
+                                        if isinstance(lidar_stmp, list) and len(lidar_stmp) > 0:
+                                            # 时间戳是微秒，需要转换为秒
+                                            # 注意：这里的时间戳是原始时间戳，需要与 camera_timestamp 一起归一化
+                                            # 但为了简化，先使用 0.0（相对于第一帧）
+                                            # 因为 TIME_RECEPTIVE_FIELD=1 时，通常只有一个时间戳
+                                            lidar_timestamps_list.append(0.0)
+                                        else:
+                                            lidar_timestamps_list.append(0.0)
+                                    else:
+                                        lidar_timestamps_list.append(0.0)
+                                else:
+                                    # 如果没有点云，创建空点云
+                                    receptive_field = getattr(self.cfg, 'TIME_RECEPTIVE_FIELD', 1)
+                                    if receptive_field > 1:
+                                        points.append([torch.zeros(0, 4, dtype=torch.float32)] * receptive_field)
+                                    else:
+                                        points.append(torch.zeros(0, 4, dtype=torch.float32))
+                                    lidar_timestamps_list.append(0.0)
+                            else:
+                                # 如果窗口格式不正确，创建空点云
+                                receptive_field = getattr(self.cfg, 'TIME_RECEPTIVE_FIELD', 1)
+                                if receptive_field > 1:
+                                    points.append([torch.zeros(0, 4, dtype=torch.float32)] * receptive_field)
+                                else:
+                                    points.append(torch.zeros(0, 4, dtype=torch.float32))
+                                lidar_timestamps_list.append(0.0)
+                        else:
+                            # 如果没有 flow_data，创建空点云
+                            receptive_field = getattr(self.cfg, 'TIME_RECEPTIVE_FIELD', 1)
+                            if receptive_field > 1:
+                                points.append([torch.zeros(0, 4, dtype=torch.float32)] * receptive_field)
+                            else:
+                                points.append(torch.zeros(0, 4, dtype=torch.float32))
+                            lidar_timestamps_list.append(0.0)
+                    
+                    # 将时间戳列表转换为张量
+                    # 注意：lidar_timestamp 需要是 [B, T] 格式，其中 T 是时间步数（TIME_RECEPTIVE_FIELD）
+                    # 对于 DSEC 配置，TIME_RECEPTIVE_FIELD=1，所以应该是 [B, 1] 格式
+                    if lidar_timestamps_list:
+                        # 先创建 [B] 格式
+                        lidar_timestamps_1d = torch.tensor(lidar_timestamps_list, dtype=torch.float32)
+                        # 添加时间维度，转换为 [B, 1] 格式
+                        # 这里假设 TIME_RECEPTIVE_FIELD=1（DSEC 配置）
+                        receptive_field = getattr(self.cfg, 'TIME_RECEPTIVE_FIELD', 1)
+                        if receptive_field == 1:
+                            # [B] -> [B, 1]
+                            lidar_timestamps = lidar_timestamps_1d.unsqueeze(1)
+                        else:
+                            # 如果 TIME_RECEPTIVE_FIELD > 1，需要重复或处理
+                            # 这里先假设每个样本只有一个时间戳，需要扩展到 T 个
+                            lidar_timestamps = lidar_timestamps_1d.unsqueeze(1).expand(-1, receptive_field)
+                    else:
+                        lidar_timestamps = None
+                else:
+                    # 使用传统的 points 格式
+                    points = batch.get('points')
+                    lidar_timestamps = batch.get('lidar_timestamp')
         
         # 获取 batch size：优先从 image，否则从 event 或其他可用字段
         if image is not None:

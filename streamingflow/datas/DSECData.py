@@ -988,8 +988,10 @@ class DatasetDSEC(torch.utils.data.Dataset):
             rec = self.ixes[index_t]
             data['camera_timestamp'].append(rec['timestamp'])
             if i < self.receptive_field:
+                # 始终计算相机内外参；即使未启用相机分支，也需为事件/几何提供有效 intrinsics/extrinsics
                 images, intrinsics, extrinsics = self.get_input_data(rec)
-                data['image'].append(images)
+                if self.use_image:
+                    data['image'].append(images)
                 data['intrinsics'].append(intrinsics)
                 data['extrinsics'].append(extrinsics)
             segmentation, instance, instance_map = self.get_label(rec, instance_map, in_pred)
@@ -1175,13 +1177,14 @@ class DatasetDSEC(torch.utils.data.Dataset):
         T_inv[:-1, -1] = -R_inv @ t
         return T_inv
 
-    def get_images_and_params(self, current_idx, idx_list):
+    def get_images_and_params(self, current_idx, idx_list, load_images=True):
         imgs_dict = {
-            'images': {},
             'extrinsic': {},
             'intrinsic': {},
             'image_shape': {}
         }
+        if load_images:
+            imgs_dict['images'] = {}
 
         for i in idx_list:
             if i != current_idx: continue
@@ -1194,27 +1197,37 @@ class DatasetDSEC(torch.utils.data.Dataset):
                     img_path = img_path.replace(img_path.split('/')[-2], 'image_%d' % j)
                     img_path = os.path.join(self.dataroot, img_path)
 
-                    img = cv2.imread(img_path)
-                    img = resize_and_crop_image(
-                        img, resize_dims=self.augmentation_parameters['resize_dims'], 
-                        crop=self.augmentation_parameters['crop'])
-                    # normalize images
-                    img = img.astype(np.float32)
-                    img /= 255.0
-                    cam_name = 'camera_%s' % str(j)
-                    
-                    ### resize image
-                    if cam_name not in imgs_dict['images']:
-                        imgs_dict['images'][cam_name] = []
-                    imgs_dict['images'][cam_name].append(img)
+                    if load_images:
+                        img = cv2.imread(img_path)
+                        img = resize_and_crop_image(
+                            img, resize_dims=self.augmentation_parameters['resize_dims'], 
+                            crop=self.augmentation_parameters['crop'])
+                        # normalize images
+                        img = img.astype(np.float32)
+                        img /= 255.0
+                        cam_name = 'camera_%s' % str(j)
+                        
+                        ### resize image
+                        if cam_name not in imgs_dict['images']:
+                            imgs_dict['images'][cam_name] = []
+                        imgs_dict['images'][cam_name].append(img)
             top_crop = self.augmentation_parameters['crop'][1]
             left_crop = self.augmentation_parameters['crop'][0]
-            img_infos['image_%d_intrinsic' % j] = torch.from_numpy(img_infos['image_%d_intrinsic' % j][:,:3])
-            img_infos['image_%d_intrinsic' % j] = update_intrinsics(
-                img_infos['image_%d_intrinsic' % j], top_crop, left_crop,
+            # 兼容多次调用：只有在为 numpy 时才从 numpy 转为 tensor，避免重复 torch.from_numpy 出错
+            intrinsic_key = 'image_%d_intrinsic' % j
+            intrinsic_val = img_infos[intrinsic_key]
+            if isinstance(intrinsic_val, np.ndarray):
+                intrinsic = torch.from_numpy(intrinsic_val[:, :3])
+            elif isinstance(intrinsic_val, torch.Tensor):
+                intrinsic = intrinsic_val[:, :3]
+            else:
+                raise TypeError(f"Unsupported intrinsic type: {type(intrinsic_val)}")
+            intrinsic = update_intrinsics(
+                intrinsic, top_crop, left_crop,
                 scale_width=self.augmentation_parameters['scale_width'],
                 scale_height=self.augmentation_parameters['scale_height']
             )
+            img_infos[intrinsic_key] = intrinsic
             
 
         for j in range(1):
@@ -1451,11 +1464,16 @@ class DatasetDSEC(torch.utils.data.Dataset):
         # 根据配置条件加载点云数据
         if self.use_lidar:
             target_infos, points = self.get_infos_and_points(target_idx_list)
-            points = points[0]
-            input_dict['points'] = points
+            # points 是一个列表，包含多个时间步的点云（当 TIME_RECEPTIVE_FIELD > 1 时）
+            # 如果 TIME_RECEPTIVE_FIELD = 1，points 只有一个元素
+            # 如果 TIME_RECEPTIVE_FIELD = 3，points 有 3 个元素（对应 3 个时间步）
+            # 将多时间步的点云列表传递给模型，模型会按时间步处理
+            input_dict['points'] = points  # 保留所有时间步的点云
             # 调试信息：确认 points 被加载
             if not hasattr(self, '_points_loaded_debug'):
-                print(f"[DSECData] use_lidar={self.use_lidar}, points loaded: shape={points.shape if hasattr(points, 'shape') else type(points)}")
+                print(f"[DSECData] use_lidar={self.use_lidar}, receptive_field={self.receptive_field}, "
+                      f"points loaded: {len(points)} time steps, "
+                      f"shapes={[p.shape if hasattr(p, 'shape') else type(p) for p in points]}")
                 self._points_loaded_debug = True
         else:
             # 调试信息：确认 use_lidar 状态
@@ -1523,6 +1541,14 @@ class DatasetDSEC(torch.utils.data.Dataset):
             # 归一化：相对于第一帧的时间戳（转换为秒）
             camera_timestamps = (camera_timestamps - camera_timestamps[0]) / 1e6
             input_dict['camera_timestamp'] = torch.from_numpy(camera_timestamps).float()  # (T,)
+
+        # 为 LiDAR 分支提供时间戳（无 STPN/BESTI 时使用与相机一致的时间轴）
+        if self.use_lidar and not (self.cfg.MODEL.LIDAR.USE_STPN or self.cfg.MODEL.LIDAR.USE_BESTI):
+            if 'camera_timestamp' in input_dict:
+                input_dict['lidar_timestamp'] = input_dict['camera_timestamp'].clone()
+            else:
+                # 回退为零时间轴，避免下游缺键
+                input_dict['lidar_timestamp'] = torch.zeros(len(target_idx_list), dtype=torch.float32)
         
         # target_timestamp：未来预测的目标时间（秒）
         n_future = getattr(self.cfg, 'N_FUTURE_FRAMES', 0)
@@ -1531,6 +1557,15 @@ class DatasetDSEC(torch.utils.data.Dataset):
         else:
             target_time = 0.0
         input_dict['target_timestamp'] = torch.tensor([target_time], dtype=torch.float32)
+
+        # 始终为事件/几何提供 intrinsics / extrinsics（基于标定文件），避免下游为 None
+        # 这里只使用当前帧的相机参数，并在时间维度上复制
+        img_params = self.get_images_and_params(index, target_idx_list, load_images=False)
+        intrinsic = img_params['intrinsic']  # [1, 1, 3, 3]
+        extrinsic = img_params['extrinsic']  # [1, 1, 4, 4]
+        T = len(target_idx_list)
+        input_dict['intrinsics'] = intrinsic.repeat(T, 1, 1, 1)    # [T, 1, 3, 3]
+        input_dict['extrinsics'] = extrinsic.repeat(T, 1, 1, 1)    # [T, 1, 4, 4]
         
         # 添加训练所需的其他字段（如果不存在）
         if 'command' not in input_dict:
@@ -1559,14 +1594,9 @@ class DatasetDSEC(torch.utils.data.Dataset):
             img_dict = self.get_images_and_params(index, target_idx_list)
             input_dict.update(img_dict)
         else:
-            # 即使不使用图像，也需要提供intrinsics和extrinsics（事件分支需要）
-            # 创建默认的相机参数
-            num_cameras = len(self.cfg.IMAGE.NAMES)
-            num_frames = len(target_idx_list)
-            default_intrinsics = torch.eye(3).unsqueeze(0).unsqueeze(0).repeat(num_frames, num_cameras, 1, 1)
-            default_extrinsics = torch.eye(4).unsqueeze(0).unsqueeze(0).repeat(num_frames, num_cameras, 1, 1)
-            input_dict['intrinsics'] = default_intrinsics
-            input_dict['extrinsics'] = default_extrinsics
+            # 不加载图像但需要真实的相机参数给事件分支
+            cam_param_dict = self.get_images_and_params(index, target_idx_list, load_images=False)
+            input_dict.update(cam_param_dict)
         
         # 如果需要流式数据格式，调用 get_data_flow（不依赖于 use_image）
         if self.use_flow_data:

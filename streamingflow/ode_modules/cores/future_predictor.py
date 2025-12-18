@@ -74,16 +74,23 @@ class FuturePredictionODE(nn.Module):
             obs_feature_with_time = {}
             if camera_states is not None:
                 for index in range(camera_timestamp.shape[1]):
-                    obs_feature_with_time[camera_timestamp[bs, index]] = camera_states[bs, index].unsqueeze(0)
+                    # 将时间戳转换为 Python 标量，避免设备不匹配问题
+                    ts = camera_timestamp[bs, index].item() if torch.is_tensor(camera_timestamp[bs, index]) else float(camera_timestamp[bs, index])
+                    obs_feature_with_time[ts] = camera_states[bs, index].unsqueeze(0)
             if lidar_states is not None:
                 for index in range(lidar_timestamp.shape[1]):
-                    obs_feature_with_time[lidar_timestamp[bs, index]] = lidar_states[bs, index].unsqueeze(0)
+                    # 将时间戳转换为 Python 标量，避免设备不匹配问题
+                    ts = lidar_timestamp[bs, index].item() if torch.is_tensor(lidar_timestamp[bs, index]) else float(lidar_timestamp[bs, index])
+                    obs_feature_with_time[ts] = lidar_states[bs, index].unsqueeze(0)
             if camera_states_hi is not None and camera_timestamp_hi is not None:
                 for index in range(camera_timestamp_hi.shape[1]):
-                    obs_feature_with_time[camera_timestamp_hi[bs, index]] = camera_states_hi[bs, index].unsqueeze(0)
+                    # 将时间戳转换为 Python 标量，避免设备不匹配问题
+                    ts = camera_timestamp_hi[bs, index].item() if torch.is_tensor(camera_timestamp_hi[bs, index]) else float(camera_timestamp_hi[bs, index])
+                    obs_feature_with_time[ts] = camera_states_hi[bs, index].unsqueeze(0)
 
             # 不同传感器可能拥有相同时间戳；排序可确保按时间顺序送入 ODE。
             # 若同一时间戳出现多个观测，后插入的会覆盖先前的，起到简单的融合作用。
+            # 现在字典的 key 是 Python 标量，排序不会有设备问题
             obs = dict(sorted(obs_feature_with_time.items(), key=lambda v: v[0]))
             # 使用模型输入的 dtype 和 device，避免类型不一致。
             times = torch.tensor(list(obs.keys()), device=future_prediction_input.device, dtype=future_prediction_input.dtype)

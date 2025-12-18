@@ -1,0 +1,400 @@
+================================================================================
+                    StreamingFlow 模型 Pipeline 流程图
+================================================================================
+
+【输入层】
+    image [B,S,N,3,H,W]          event [B,S,N,C,H,W]          points [List[Tensor(N_i,4)]]
+    intrinsics [B,S,N,3,3]       extrinsics [B,S,N,4,4]       future_egomotion [B,S,6]
+    camera_timestamp [B,S]       lidar_timestamp [B,S]         target_timestamp [B]
+    metas (for detection)
+         |                              |                              |
+         |                              |                              |
+         +------------------------------+------------------------------+
+                                       |
+                    [forward() 方法入口]
+                                       |
+                                       v
+    ============================================================================
+    【分支1: LiDAR 处理路径】 (if use_lidar)
+    ============================================================================
+         points [List[Tensor]]
+              |
+              v
+    [标准化: numpy -> tensor, 类型转换]
+              |
+              v
+    extract_lidar_features()
+         |
+         +--> voxelize() [点云体素化]
+         |        |
+         |        v
+         |    [Voxelization/DynamicScatter]
+         |       需求是在 forward() 中同时保留 Event 和 LiDAR 的 states，让 FuturePredictionODE 处理异步对齐 |
+         |        v
+         |    feats [N_voxels, C], coords [N_voxels, 4], sizes [N_voxels]
+         |
+         +--> encoders["lidar"]["backbone"]() [SparseEncoder]
+         |        |
+         |        v
+         |    feature [B, C_lidar, H_det, W_det]
+         |
+         v
+    [恢复时间维度: view(B, T, C, H, W)]
+         |
+         v
+    temporal_model_lidar()
+         |
+         v
+    lidar_states [B, T, C_lidar, H, W]
+         |
+         v
+    [如果只有LiDAR: states = lidar_states]
+         |
+         +----------------------------------------------------------------------+
+                                                                              |
+    ============================================================================
+    【分支2: Camera/Event 处理路径】 (if use_camera or use_event)
+    ============================================================================
+         image [B,S,N,3,H,W] 或  event [B,S,N,C,H,W]
+              |                              |
+              +------------------------------+
+                                       |
+                                       v
+    calculate_birds_eye_view_features()
+         |
+         +--> get_geometry(intrinsics, extrinsics)
+         |        |
+         |        v
+         |    geometry [B, S, N, D, H, W, 3]  (3D点位置)
+         |
+         +--> [Camera分支] (if use_camera)
+         |        |
+         |        v
+         |    encoder_forward(image)
+         |        |
+         |        +--> encoder() [EfficientNet]
+         |        |        |
+         |        |        v
+         |        |    cam_feats [B*N, C, H', W'], depth [B*N, D, H', W']
+         |        |
+         |        v
+         |    camera_volume [B, S, N, D, H, W, C]
+         |    camera_depth_logits [B, S, N, D, H, W]
+         |
+         +--> [Event分支] (if use_event)
+         |        |
+         |        v
+         |    _prepare_event_frames(event)
+         |        |
+         |        v
+         |    event_frames [B, S, N, C, H, W]
+         |        |
+         |        v
+         |    event_encoder_forward() [EventEncoderEvRT]
+         |        |
+         |        v
+         |    event_feats [B*S*N, C_out, H', W']
+         |    event_depth_logits [B*S*N, D, H', W']
+         |        |
+         |        v
+         |    _expand_features_with_depth()
+         |        |
+         |        v
+         |    event_volume [B, S, N, C, D, H, W]
+         |
+         +--> [Camera-Event融合] (if both exist and FUSION_TYPE in {concat, residual})
+         |        |
+         |        v
+         |    fuse_camera_event_features()
+         |        |
+         |        v
+         |    camera_volume [融合后]
+         |
+         +--> projection_to_birds_eye_view()
+              |
+              +--> [对每个时间步 t]
+                   |
+                   +--> [几何变换: 3D voxel -> 当前帧坐标系]
+                   |        |
+                   |        v
+                   |    geometry_b [变换后]
+                   |
+                   +--> bev_pool()
+                   |        |
+                   |        v
+                   |    x_b [BEV特征], geometry_b [过滤后]
+                   |
+                   +--> [累积: bev_feature = discount * bev_feature + tmp]
+                   |
+                   v
+              bev_sequence [B, S, C, H_bev, W_bev]
+                   |
+                   v
+    [BEV融合] (if both camera and event)
+         |
+         +--> [sum/avg fusion]
+         |
+         v
+    bev_sequence [融合后]
+         |
+         v
+    [添加ego pose] (if INPUT_EGOPOSE)
+         |
+         v
+    bev_sequence [B, S, C+6, H, W]
+         |
+         v
+    temporal_model() [TemporalModel or TemporalModelIdentity]
+         |
+         v
+    camera_states [B, T, C, H, W]
+         |
+         v
+    [如果有Event/Camera: states = camera_states] ⚠️ 这里覆盖了lidar_states
+         |
+         +----------------------------------------------------------------------+
+                                                                              |
+    ============================================================================
+    【高频相机处理】 (可选, if image_hi exists)
+    ============================================================================
+         image_hi [B, S_hi, N, 3, H, W]
+              |
+              v
+    calculate_birds_eye_view_features()
+              |
+              v
+    camera_states_hi [B, S_hi, C, H, W]
+              |
+              +------------------------------------------------------------------+
+                                                                              |
+    ============================================================================
+    【未来预测路径】 (if n_future > 0)
+    ============================================================================
+         past_states = states [B, T, C, H, W]
+         present_state = states[:, -1:]
+         |
+         v
+    FuturePredictionODE.forward()
+         |
+         +--> [对每个batch]
+              |
+              +--> [观测对齐]
+                   |
+                   +--> obs_feature_with_time = {}
+                   |        |
+                   |        +--> camera_states + camera_timestamp -> dict
+                   |        +--> lidar_states + lidar_timestamp -> dict
+                   |        +--> camera_states_hi + camera_timestamp_hi -> dict
+                   |
+                   v
+              [按时间戳排序]
+                   |
+                   v
+              observations [T_obs, C, H, W]  (按时间排序的观测序列)
+              times [T_obs]  (时间戳序列)
+                   |
+                   v
+              NNFOwithBayesianJumps()
+                   |
+                   +--> [编码观测]
+                   |        |
+                   |        v
+                   |    encoded_obs
+                   |
+                   +--> [ODE积分]
+                   |        |
+                   |        +--> DualGRUODECell (连续动力学)
+                   |        +--> GRUObservationCell (跳跃更新)
+                   |        |
+                   |        v
+                   |    [在观测时间点进行跳跃更新]
+                   |
+                   +--> [潜在状态采样]
+                   |        |
+                   |        v
+                   |    latent_sample
+                   |
+                   +--> [解码]
+                   |        |
+                   |        v
+                   |    predict_x [B, n_future, C, H, W]
+                   |
+                   v
+              [SpatialGRU精炼]
+                   |
+                   +--> SpatialGRU × n_gru_blocks
+                   +--> Block/DeepLabHead × n_res_layers
+                   |
+                   v
+              future_states [B, n_future, C, H, W]
+         |
+         v
+    [拼接: past_states + future_states]
+         |
+         v
+    states [B, T + n_future, C, H, W]
+         |
+         +----------------------------------------------------------------------+
+                                                                              |
+    ============================================================================
+    【解码器路径】 (if n_future == 0 或 after future prediction)
+    ============================================================================
+         states [B, T, C, H, W] 或 [B, T+n_future, C, H, W]
+              |
+              v
+    [根据任务选择解码器]
+         |
+         +--> [检测任务] (if DETECTION.ENABLED)
+         |        |
+         |        v
+         |    DetectionDecoder()
+         |        |
+         |        +--> DetectionHead
+         |        |        |
+         |        |        v
+         |        |    detection [B, T, num_proposals, ...]
+         |        |
+         |        v
+         |    output['detection']
+         |
+         +--> [分割/规划任务] (else)
+              |
+              v
+         Decoder()
+              |
+              +--> [语义分割]
+              |        |
+              |        v
+              |    segmentation [B, T, n_classes, H, W]
+              |
+              +--> [实例分割] (if INSTANCE_SEG.ENABLED)
+              |        |
+              |        v
+              |    instance_center [B, T, 1, H, W]
+              |    instance_offset [B, T, 2, H, W]
+              |
+              +--> [实例流] (if INSTANCE_FLOW.ENABLED)
+              |        |
+              |        v
+              |    instance_flow [B, T, 2, H, W]
+              |
+              +--> [HD地图] (if HDMAP.ENABLED)
+              |        |
+              |        v
+              |    hdmap [B, n_elements*2, H, W]
+              |
+              +--> [规划] (if PLANNING.ENABLED)
+                   |
+                   v
+              costvolume [B, T, H, W]
+                   |
+                   v
+              Planning.forward()
+                   |
+                   +--> Cost_Function()
+                   |        |
+                   |        v
+                   |    cost_fc, cost_fo
+                   |
+                   v
+              selected_traj [B, T, 3]
+         |
+         v
+    output = {
+        'segmentation': ...,
+        'instance_center': ...,
+        'instance_offset': ...,
+        'instance_flow': ...,
+        'hdmap': ...,
+        'costvolume': ...,
+        'detection': ...,
+        'depth_prediction': ...,
+        'event_depth_prediction': ...,
+        'cam_front': ...,
+        ...
+    }
+         |
+         v
+    [返回 output]
+
+================================================================================
+                            【关键数据流形状】
+================================================================================
+
+输入:
+  - image: [B, S, N, 3, H_img, W_img]
+  - event: [B, S, N, C_event, H_event, W_event] 或 dict{'frames': ...}
+  - points: List[Tensor(N_i, 4)]  (变长点云列表)
+  - intrinsics: [B, S, N, 3, 3]
+  - extrinsics: [B, S, N, 4, 4]
+  - camera_timestamp: [B, S]
+  - lidar_timestamp: [B, S]
+
+编码后:
+  - camera_volume: [B, S, N, D, H, W, C]
+  - event_volume: [B, S, N, D, H, W, C]
+  - lidar_feature: [B, C, H_det, W_det]
+
+BEV提升后:
+  - bev_sequence: [B, S, C, H_bev, W_bev]
+
+时间模型后:
+  - camera_states: [B, T, C, H, W]
+  - lidar_states: [B, T, C_lidar, H, W]
+  - states: [B, T, C, H, W]  (当前被camera_states覆盖)
+
+未来预测后 (if n_future > 0):
+  - future_states: [B, n_future, C, H, W]
+  - states: [B, T + n_future, C, H, W]
+
+解码器输出:
+  - segmentation: [B, T, n_classes, H, W]
+  - detection: [B, T, num_proposals, ...]
+  - costvolume: [B, T, H, W]
+  - ...
+
+================================================================================
+                            【当前问题点】
+================================================================================
+
+⚠️ 问题1: states覆盖问题
+  位置: 第533行
+  问题: states = camera_states 覆盖了 lidar_states
+  影响: 当同时有Event和LiDAR时，lidar_states丢失
+
+⚠️ 问题2: FuturePredictionODE只在n_future>0时调用
+  位置: 第557行
+  问题: 当前配置N_FUTURE_FRAMES=0，不会调用FuturePredictionODE
+  影响: 异步对齐功能无法使用
+
+⚠️ 问题3: 异步对齐只在FuturePredictionODE中实现
+  位置: FuturePredictionODE.forward() 第74-90行
+  问题: 如果n_future=0，无法进行异步对齐
+  影响: Event和LiDAR的时间戳对齐无法实现
+
+================================================================================
+                            【数据流关键节点】
+================================================================================
+
+节点1: 多模态编码 (并行)
+   ├─ Camera: image -> encoder -> camera_volume
+   ├─ Event: event -> event_encoder -> event_volume
+   └─ LiDAR: points -> voxelize -> backbone -> lidar_feature
+
+节点2: BEV提升 (统一)
+   ├─ get_geometry() 生成3D几何
+   ├─ projection_to_birds_eye_view() 投影到BEV
+   └─ bev_pool() 池化到BEV网格
+
+节点3: 时间建模 (分离)
+   ├─ camera_states = temporal_model(bev_sequence)
+   └─ lidar_states = temporal_model_lidar(lidar_feature)
+
+节点4: 异步对齐 (仅在n_future>0时)
+   └─ FuturePredictionODE 按时间戳对齐和融合
+
+节点5: 解码 (统一)
+   └─ Decoder/DetectionDecoder 生成最终输出
+
+================================================================================
+

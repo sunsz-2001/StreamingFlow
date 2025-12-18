@@ -81,11 +81,11 @@ _C.IMAGE.ORIGINAL_WIDTH = 1600  # Original input RGB camera width
 _C.IMAGE.NAMES = ['CAM_FRONT_LEFT', 'CAM_FRONT', 'CAM_FRONT_RIGHT', 'CAM_BACK_LEFT', 'CAM_BACK', 'CAM_BACK_RIGHT']
 
 _C.LIFT = CN()  # image to BEV lifting
-_C.LIFT.X_BOUND = [-50.0, 50.0, 0.5]  # Forward
-_C.LIFT.Y_BOUND = [-50.0, 50.0, 0.5]  # Sides
+_C.LIFT.X_BOUND = [-51.2, 51.2, 0.8]  # Forward
+_C.LIFT.Y_BOUND = [-51.2, 51.2, 0.8]  # Sides
 _C.LIFT.Z_BOUND = [-10.0, 10.0, 20.0]  # Height
 _C.LIFT.D_BOUND = [2.0, 50.0, 1.0]
-_C.LIFT.RANGE = [-50, -50, -5.0, 50, 50, 3.0]
+_C.LIFT.RANGE = [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
 _C.LIFT.GT_DEPTH = True
 _C.LIFT.GEN_DEPTH = False
 _C.LIFT.DISCOUNT = 0.5
@@ -150,8 +150,8 @@ _C.MODEL.EVENT.DOWNSAMPLE = 8  # Event encoder downsampling rate (fixed for Even
 
 
 _C.VOXEL = CN()  # Lidar pointcloud voxelization
-_C.VOXEL.VOXEL_SIZE = (0.5, 0.5, 0.4)
-_C.VOXEL.AREA_EXTENTS = [[-50., 50.], [-50., 50.], [-3, 2]]
+_C.VOXEL.VOXEL_SIZE = (0.8, 0.8, 0.4)
+_C.VOXEL.AREA_EXTENTS = [[-51.2, 51.2], [-51.2, 51.2], [-3, 2]]
 
 
 _C.MODEL.LIDAR.HEIGHT_FEAT_SIZE = int((_C.VOXEL.AREA_EXTENTS[2][1]-_C.VOXEL.AREA_EXTENTS[2][0])/_C.VOXEL.VOXEL_SIZE[2]) + 1

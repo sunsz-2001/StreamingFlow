@@ -1,0 +1,162 @@
+TAG: 'dsec_event_lidar_eval'  # 训练日志和检查点保存目录名（与 event-only 区分）
+
+GPUS: [1]
+BATCHSIZE: 2
+PRECISION: 16  # 16 或 32，混合精度训练使用 16
+EPOCHS: 30  # 训练轮数
+
+N_WORKERS: 4  # 数据加载器工作进程数
+# LOG_DIR: 'logs'  # 日志保存目录（默认：'logs'）
+# GRAD_NORM_CLIP: 5  # 梯度裁剪阈值（默认：5）
+# LOGGING_INTERVAL: 500  # 日志记录间隔（默认：500）
+# VIS_INTERVAL: 5000  # 可视化间隔（默认：5000）
+
+DATASET:
+  NAME: 'dsec'
+  DATAROOT: '/media/switcher/sda/datasets/dsec'
+  USE_FLOW_DATA: True  # 启用流式数据格式，支持异步多模态数据融合
+  # 【重要】启用流式模式以支持异步多模态数据融合
+  # 
+  # True - 流式模式（异步支持）：
+  # - 事件序列被分割成多个时间窗口（flow_data），每个窗口包含部分事件和对应的点云
+  # - 数据格式：batch['flow_data'] 是一个列表，每个元素是一个字典，包含：
+  #   * 'flow_events': 该窗口的事件数据列表
+  #   * 'flow_lidar': 该窗口对应的点云数据列表（如果启用LiDAR）
+  #   * 'events_stmp': 事件时间戳列表
+  #   * 'lidar_stmp': 点云时间戳列表
+  #   * 'curr_time_stmp': 当前窗口的结束时间戳
+  # - 支持事件和LiDAR具有不同采样率的异步场景
+  # - 适用于流式预测任务和需要细粒度时间对齐的场景
+  # - 注意：启用此模式后，batch中不再包含 'points' 和 'events_grid' 键
+  # 
+  # False - 非流式模式（同步模式）：
+  # - 事件和LiDAR数据需要时间戳同步
+  # - 数据格式：batch['points'] 和 batch['event'] 独立存在
+  # - 适用于标准检测/分割任务
+  # 
+  # 【注意事项】
+  # 1. 流式模式需要模型支持处理 flow_data 格式，或需要数据预处理层进行转换
+  # 2. 当前模型代码可能需要修改以支持 flow_data 格式的处理
+  # 3. 建议先测试流式模式是否正常工作，如遇到问题可能需要：
+  #    - 在数据加载器中添加 flow_data -> event/points 的转换逻辑
+  #    - 或修改模型以直接处理 flow_data 格式
+  EVENTS_ROOT: ''  # 若事件帧已与图像同目录，可保留为空
+  EVENTS_FILE_SUFFIX: '.npz'
+  EVENTS_NORMALIZATION: 255.0
+  EVENTS_FALLBACK_ZERO: True
+  EVENT_CAMERAS: ['camera_0']
+  VERSION: 'trainval'
+
+TIME_RECEPTIVE_FIELD: 3  # 时间感受野（过去帧数），1 表示只使用当前帧
+N_FUTURE_FRAMES: 2  # 未来预测帧数
+# 【重要】启用异步融合需要设置 N_FUTURE_FRAMES > 0
+# - N_FUTURE_FRAMES > 0: 启用未来预测和异步融合，FuturePredictionODE 会处理异步对齐
+# - N_FUTURE_FRAMES = 0: 仅使用过去帧，不进行未来预测（同步模式）
+# 建议值：4-6（根据任务需求调整，值越大计算量越大）
+
+IMAGE:
+  FINAL_DIM: [256, 512]
+  RESIZE_SCALE: 1.0
+  TOP_CROP: 0
+  ORIGINAL_HEIGHT: 256
+  ORIGINAL_WIDTH: 512
+  NAMES: ['camera_0']
+
+LIFT:
+  GT_DEPTH: False
+  GEN_DEPTH: False
+  X_BOUND: [-50.0, 50.0, 0.5]  # Forward direction [min, max, resolution]
+  Y_BOUND: [-50.0, 50.0, 0.5]  # Side direction [min, max, resolution]
+  Z_BOUND: [-10.0, 10.0, 20.0]  # Height [min, max, resolution]
+  D_BOUND: [2.0, 50.0, 1.0]  # Depth [min, max, resolution]
+
+MODEL:
+  MODALITY:
+    USE_CAMERA: False
+    USE_EVENT: True
+    USE_LIDAR: True   # 同时启用 LiDAR 分支
+    USE_RADAR: False
+  ENCODER:
+    NAME: 'efficientnet-b0'
+    OUT_CHANNELS: 64
+    DOWNSAMPLE: 8
+    USE_DEPTH_DISTRIBUTION: False
+  EVENT:
+    BACKBONE: 'presnet50'
+    BINS: 5
+    IN_CHANNELS: 5  # 直接使用5个通道，不进行时间维度堆叠
+    HIDDEN_DIM: 256
+    NUM_ENCODER_LAYERS: 1
+    NUM_HEADS: 8
+    PRETRAINED: False
+    FREEZE_BACKBONE: False
+    MULTISCALE_FUSION: 'sum'
+    FUSION_TYPE: 'independent'
+    BEV_FUSION: 'sum'
+    USE_DEPTH_HEAD: True
+    DEPTH_BINS: 80
+    DEPTH_HEAD_CHANNELS: 128
+    RESIDUAL_INIT: 0.0
+    INPUT_SIZE: [240, 320]  # Event 输入分辨率 [H, W]
+    DOWNSAMPLE: 8  # Event encoder 下采样率（EventEncoderEvRT 固定为 8）
+  TEMPORAL_MODEL:
+    NAME: 'identity'
+    INPUT_EGOPOSE: False
+    START_OUT_CHANNELS: 64  # 输出通道数，需与ENCODER.OUT_CHANNELS匹配
+  
+  # ODE 求解器配置（用于异步融合和未来预测）
+  SOLVER: 'euler'  # ODE 求解器类型: 'euler'（欧拉法，快速）, 'midpoint'（中点法，更准确）, 'dopri5'（自适应步长，最准确但最慢）
+  IMPUTE: False  # 是否启用缺失数据填充（当某些时间戳没有观测数据时）
+  
+  # 分布配置（用于未来预测的不确定性建模）
+  DISTRIBUTION:
+    LATENT_DIM: 64  # 隐藏层维度，通常与 TEMPORAL_MODEL.START_OUT_CHANNELS 相同
+    MIN_LOG_SIGMA: -5.0  # 最小对数方差（用于限制预测的不确定性范围）
+    MAX_LOG_SIGMA: 5.0  # 最大对数方差
+  
+  # 未来预测配置（当 N_FUTURE_FRAMES > 0 时启用）
+  FUTURE_PRED:
+    N_GRU_BLOCKS: 2  # 空间 GRU 层数（用于处理空间信息）
+    N_RES_LAYERS: 1  # 残差块层数（用于特征提取）
+    MIXTURE: True  # 是否使用混合分布（用于建模多模态不确定性）
+    DELTA_T: 0.05  # ODE 求解的时间步长（秒），越小越准确但计算量越大
+    USE_VARIABLE_ODE_STEP: False  # 是否使用自适应步长（需要 SOLVER='dopri5'）
+
+SEMANTIC_SEG:
+  PEDESTRIAN:
+    ENABLED: False
+  HDMAP:
+    ENABLED: False
+
+INSTANCE_SEG:
+  ENABLED: False
+
+INSTANCE_FLOW:
+  ENABLED: False
+
+PLANNING:
+  ENABLED: False
+
+DETECTION:
+  ENABLED: True
+  NUM_CLASSES: 3  # Vehicle, Cyclist, Pedestrian三个类别
+  NUM_PROPOSALS: 128
+  HIDDEN_CHANNEL: 128
+  NUM_DECODER_LAYERS: 3
+  NUM_HEADS: 8
+  NMS_KERNEL_SIZE: 1
+  FFN_CHANNEL: 256
+  DROPOUT: 0.1
+  AUXILIARY: True
+  OUT_SIZE_FACTOR: 8
+  DATASET: 'dsec'
+
+OPTIMIZER:
+  LR: 1e-4
+  WEIGHT_DECAY: 1e-7
+
+PRETRAINED:
+  LOAD_WEIGHTS: False
+  PATH: ''  # 暂不使用旧 ckpt，LiDAR 与 Event 均从当前结构随机初始化训练
+
+

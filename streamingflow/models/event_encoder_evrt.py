@@ -126,17 +126,30 @@ class EventEncoderEvRT(nn.Module):
                     stats = f"min={param.min().item():.6f}, max={param.max().item():.6f}, mean={param.mean().item():.6f}"
                     raise ValueError(f"NaN/Inf in backbone parameter {name}. Stats: {stats}")
         
-        # Validate BatchNorm running stats
+        # Validate BatchNorm running stats and fix numerical issues
         for name, module in self.backbone.named_modules():
             if isinstance(module, (nn.BatchNorm2d, nn.BatchNorm1d)):
                 if hasattr(module, 'running_mean') and module.running_mean is not None:
                     if torch.isnan(module.running_mean).any() or torch.isinf(module.running_mean).any():
-                        raise ValueError(f"NaN/Inf in backbone BatchNorm running_mean: {name}")
+                        print(f"[WARNING] NaN/Inf in BatchNorm running_mean: {name}. Resetting to 0.")
+                        module.running_mean.data = torch.where(
+                            torch.isnan(module.running_mean) | torch.isinf(module.running_mean),
+                            torch.zeros_like(module.running_mean),
+                            module.running_mean
+                        )
                 if hasattr(module, 'running_var') and module.running_var is not None:
                     if torch.isnan(module.running_var).any() or torch.isinf(module.running_var).any():
-                        raise ValueError(f"NaN/Inf in backbone BatchNorm running_var: {name}")
-                    if (module.running_var <= 0).any():
-                        raise ValueError(f"Non-positive variance in backbone BatchNorm running_var: {name}, min={module.running_var.min().item()}")
+                        print(f"[WARNING] NaN/Inf in BatchNorm running_var: {name}. Resetting to 1.")
+                        module.running_var.data = torch.where(
+                            torch.isnan(module.running_var) | torch.isinf(module.running_var),
+                            torch.ones_like(module.running_var),
+                            module.running_var
+                        )
+                    # 确保 running_var 不会太小（防止除以 0）
+                    min_var = 1e-5  # 最小方差阈值
+                    if (module.running_var < min_var).any():
+                        print(f"[WARNING] BatchNorm running_var too small in {name}. Clamping to {min_var}.")
+                        module.running_var.data = torch.clamp(module.running_var.data, min=min_var)
         
         feats: List[torch.Tensor] = self.backbone(x)
         for i, feat in enumerate(feats):
