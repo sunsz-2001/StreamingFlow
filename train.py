@@ -41,6 +41,9 @@ def get_latest_checkpoint(folder_path):
 
 
 def main():
+    # Enable anomaly detection to debug inplace operation errors
+    torch.autograd.set_detect_anomaly(True)
+    
     args = get_parser().parse_args()
     cfg = get_cfg(args)
 
