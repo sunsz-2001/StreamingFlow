@@ -18,8 +18,8 @@ def to_device(batch: Dict, device: torch.device) -> Dict:
     return batch
 
 
-def gather_batch_outputs(model, batch, device, cfg=None) -> Tuple[List, List]:
-    """Run forward pass and decode predictions."""
+def gather_batch_outputs(model, batch, device, cfg=None, decode: bool = True) -> Tuple[List, List]:
+    """Run forward pass and optionally decode predictions."""
     event = batch.get("event")
     
     # 处理 points 和 lidar_timestamp：如果使用 flow_data 格式，需要从 flow_data 中提取
@@ -146,6 +146,9 @@ def gather_batch_outputs(model, batch, device, cfg=None) -> Tuple[List, List]:
         event=event,
     )
 
+    if not decode:
+        return [], []
+
     preds_raw = output["detection"]
     decoded = model.decoder.detection_head.get_bboxes(preds_raw, batch["metas"])
     # decoded: [[boxes, scores, labels]] - 外层是layer，内层是batch
@@ -250,6 +253,7 @@ def export_and_eval(_cfg_path: str, checkpoint: str, dataroot: str, iou_thr: flo
     print(f"[Config] USE_CAMERA: {cfg.MODEL.MODALITY.USE_CAMERA}")
     
     # 加载检查点并更新模型配置
+    ckpt = torch.load(checkpoint, map_location="cpu")
     trainer = TrainingModule.load_from_checkpoint(checkpoint, strict=False)
     trainer.eval().to(device)
     
@@ -265,6 +269,25 @@ def export_and_eval(_cfg_path: str, checkpoint: str, dataroot: str, iou_thr: flo
 
     _, valloader = prepare_dataloaders(cfg)
 
+    # Warm-up forward to initialize lazy LiDAR modules before re-loading weights.
+    val_iter = iter(valloader)
+    try:
+        first_batch = next(val_iter)
+    except StopIteration:
+        print("[Warning] Validation loader is empty, nothing to evaluate.")
+        return
+
+    first_batch = to_device(first_batch, device)
+    with torch.no_grad():
+        _ = gather_batch_outputs(trainer.model, first_batch, device, cfg=cfg, decode=False)
+
+    incompatible = trainer.load_state_dict(ckpt.get("state_dict", {}), strict=False)
+    if incompatible.missing_keys or incompatible.unexpected_keys:
+        print(
+            f"[Checkpoint] Missing keys: {len(incompatible.missing_keys)}, "
+            f"unexpected keys: {len(incompatible.unexpected_keys)}"
+        )
+
     preds_all = []
     gts_all = {}
     class_names = ["Vehicle", "Cyclist", "Pedestrian"]
@@ -276,8 +299,18 @@ def export_and_eval(_cfg_path: str, checkpoint: str, dataroot: str, iou_thr: flo
     pred_counts_per_class = {0: 0, 1: 0, 2: 0}  # Vehicle, Cyclist, Pedestrian
     gt_counts_per_class = {0: 0, 1: 0, 2: 0}  # Vehicle, Cyclist, Pedestrian
 
-    for batch in tqdm(valloader, desc="Exporting predictions"):
-        batch = to_device(batch, device)
+    def iter_batches():
+        yield first_batch
+        for batch in val_iter:
+            yield to_device(batch, device)
+
+    total_batches = None
+    try:
+        total_batches = len(valloader)
+    except TypeError:
+        total_batches = None
+
+    for batch in tqdm(iter_batches(), desc="Exporting predictions", total=total_batches):
         with torch.no_grad():
             preds, gts = gather_batch_outputs(trainer.model, batch, device, cfg=cfg)
         for idx, (pred, gt) in enumerate(zip(preds, gts)):
