@@ -76,11 +76,25 @@ class FuturePredictionODE(nn.Module):
             # --- 时间归一化逻辑 ---
             # 1. 收集当前 batch 所有相关的绝对时间戳，找到 t0 (最小值)
             all_timestamps = []
+            
             if camera_timestamp is not None:
-                # 假设 camera_timestamp 是 [B, T]
-                all_timestamps.extend(camera_timestamp[bs].detach().cpu().numpy().tolist())
+                ts_bs = camera_timestamp[bs]
+                # 兼容 Tensor, numpy array 和 list
+                if torch.is_tensor(ts_bs):
+                    all_timestamps.extend(ts_bs.detach().cpu().numpy().tolist())
+                elif isinstance(ts_bs, np.ndarray):
+                    all_timestamps.extend(ts_bs.tolist())
+                else:
+                    all_timestamps.extend(list(ts_bs))
+
             if lidar_timestamp is not None:
-                all_timestamps.extend(lidar_timestamp[bs].detach().cpu().numpy().tolist())
+                ts_bs = lidar_timestamp[bs]
+                if torch.is_tensor(ts_bs):
+                    all_timestamps.extend(ts_bs.detach().cpu().numpy().tolist())
+                elif isinstance(ts_bs, np.ndarray):
+                    all_timestamps.extend(ts_bs.tolist())
+                else:
+                    all_timestamps.extend(list(ts_bs))
             
             # 找到起始时间 t0 (防止空列表错误)
             t0 = min(all_timestamps) if all_timestamps else 0.0
