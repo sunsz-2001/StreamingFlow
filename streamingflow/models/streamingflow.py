@@ -178,119 +178,77 @@ class streamingflow(nn.Module):
 
         if self.use_lidar:          
             # DSEC 点云为 (N, 4) [x, y, z, intensity]，因此 SparseEncoder 的 in_channels 设为 4
-            if True:  # 当前激活的配置
-                point_cloud_range = [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
-                voxel_size = [0.1, 0.1, 0.2]
-                sparse_shape = [41, 1024, 1024]  # [Z, Y, X] 顺序
-                
-                # 打印配置信息用于调试
-                print("=" * 80)
-                print("[DEBUG] LiDAR Encoder Configuration:")
-                print(f"  point_cloud_range: {point_cloud_range} [x_min, y_min, z_min, x_max, y_max, z_max]")
-                print(f"  voxel_size: {voxel_size} [x, y, z]")
-                print(f"  sparse_shape: {sparse_shape} [Z, Y, X]")
-                
-                # 计算验证
-                x_range = point_cloud_range[3] - point_cloud_range[0]
-                y_range = point_cloud_range[4] - point_cloud_range[1]
-                z_range = point_cloud_range[5] - point_cloud_range[2]
-                x_size = int(round(x_range / voxel_size[0]))
-                y_size = int(round(y_range / voxel_size[1]))
-                z_size = int(round(z_range / voxel_size[2]))
-                
-                print(f"\n[DEBUG] Calculated grid sizes:")
-                print(f"  X: ({point_cloud_range[3]} - {point_cloud_range[0]}) / {voxel_size[0]} = {x_range} / {voxel_size[0]} = {x_size}")
-                print(f"  Y: ({point_cloud_range[4]} - {point_cloud_range[1]}) / {voxel_size[1]} = {y_range} / {voxel_size[1]} = {y_size}")
-                print(f"  Z: ({point_cloud_range[5]} - {point_cloud_range[2]}) / {voxel_size[2]} = {z_range} / {voxel_size[2]} = {z_size}")
-                print(f"\n[DEBUG] Expected sparse_shape [Z, Y, X]: [{z_size}, {y_size}, {x_size}]")
-                print(f"[DEBUG] Actual sparse_shape [Z, Y, X]: {sparse_shape}")
-                if sparse_shape != [z_size, y_size, x_size]:
-                    print(f"[WARNING] sparse_shape mismatch! Expected [{z_size}, {y_size}, {x_size}], got {sparse_shape}")
-                print("=" * 80)
-                
-                encoders = {
-                    'lidar': {
-                        'voxelize': {
-                            'max_num_points': 10,
-                            'point_cloud_range': point_cloud_range,
-                            'voxel_size': voxel_size,
-                            'max_voxels': [90000, 120000],
-                        },
-                        'backbone': {
-                            'type': 'SparseEncoder',
-                            'in_channels': 4,  # 与 DSEC 点云通道数对齐
-                            'sparse_shape': sparse_shape,
-                            'output_channels': 128,
-                            'order': ['conv', 'norm', 'act'],
-                            'encoder_channels': [[16, 16, 32], [32, 32, 64], [64, 64, 128], [128, 128]],
-                            'encoder_paddings': [[0, 0, 1], [0, 0, 1], [0, 0, [1, 1, 0]], [0, 0]],
-                            'block_type': 'basicblock',
-                        },
+            voxel_size = [float(v) for v in self.cfg.VOXEL.VOXEL_SIZE]
+            area_extents = np.array(self.cfg.VOXEL.AREA_EXTENTS, dtype=np.float32)
+            point_cloud_range = [
+                float(area_extents[0][0]),
+                float(area_extents[1][0]),
+                float(area_extents[2][0]),
+                float(area_extents[0][1]),
+                float(area_extents[1][1]),
+                float(area_extents[2][1]),
+            ]
+            x_range = point_cloud_range[3] - point_cloud_range[0]
+            y_range = point_cloud_range[4] - point_cloud_range[1]
+            z_range = point_cloud_range[5] - point_cloud_range[2]
+            x_size = int(round(x_range / voxel_size[0]))
+            y_size = int(round(y_range / voxel_size[1]))
+            z_size = int(round(z_range / voxel_size[2]))
+            sparse_shape = [z_size, y_size, x_size]  # [Z, Y, X]
+
+            # 打印配置信息用于调试
+            print("=" * 80)
+            print("[DEBUG] LiDAR Encoder Configuration:")
+            print(f"  point_cloud_range: {point_cloud_range} [x_min, y_min, z_min, x_max, y_max, z_max]")
+            print(f"  voxel_size: {voxel_size} [x, y, z]")
+            print(f"  sparse_shape: {sparse_shape} [Z, Y, X]")
+            print(f"\n[DEBUG] Calculated grid sizes:")
+            print(f"  X: ({point_cloud_range[3]} - {point_cloud_range[0]}) / {voxel_size[0]} = {x_range} / {voxel_size[0]} = {x_size}")
+            print(f"  Y: ({point_cloud_range[4]} - {point_cloud_range[1]}) / {voxel_size[1]} = {y_range} / {voxel_size[1]} = {y_size}")
+            print(f"  Z: ({point_cloud_range[5]} - {point_cloud_range[2]}) / {voxel_size[2]} = {z_range} / {voxel_size[2]} = {z_size}")
+            print("=" * 80)
+
+            encoders = {
+                'lidar': {
+                    'voxelize': {
+                        'max_num_points': 10,
+                        'point_cloud_range': point_cloud_range,
+                        'voxel_size': voxel_size,
+                        'max_voxels': [90000, 120000],
                     },
-                    'temporal_model': {
-                        'type': 'Temporal3DConvModel',
-                        'receptive_field': 3,
-                        'input_egopose': True,
-                        'in_channels': 256,
-                        'input_shape': [128, 128],
-                        'with_skip_connect': True,
-                        'start_out_channels': 256,
-                        'det_grid_conf': {
-                            'xbound': [-54.0, 54.0, 0.6],
-                            'ybound': [-54.0, 54.0, 0.6],
-                            'zbound': [-10.0, 10.0, 20.0],
-                            'dbound': [1.0, 60.0, 1.0],
-                        },
-                        'grid_conf': {
-                            'xbound': [-51.2, 51.2, 0.8],
-                            'ybound': [-51.2, 51.2, 0.8],
-                            'zbound': [-10.0, 10.0, 20.0],
-                            'dbound': [1.0, 60.0, 1.0],
-                        },
+                    'backbone': {
+                        'type': 'SparseEncoder',
+                        'in_channels': 4,  # 与 DSEC 点云通道数对齐
+                        'sparse_shape': sparse_shape,
+                        'output_channels': 128,
+                        'order': ['conv', 'norm', 'act'],
+                        'encoder_channels': [[16, 16, 32], [32, 32, 64], [64, 64, 128], [128, 128]],
+                        'encoder_paddings': [[0, 0, 1], [0, 0, 1], [0, 0, [1, 1, 0]], [0, 0]],
+                        'block_type': 'basicblock',
                     },
-                }
-            else:  # 未激活的配置
-                encoders = {
-                    'lidar': {
-                        'voxelize': {
-                            'max_num_points': 10,
-                            'point_cloud_range': [-50.0, -50.0, -5.0, 50.0, 50.0, 3.0],
-                            'voxel_size': [0.0625, 0.0625, 0.2],
-                            'max_voxels': [120000, 160000],
-                        },
-                        'backbone': {
-                            'type': 'SparseEncoder',
-                            'in_channels': 4,  # 与 DSEC 点云通道数对齐
-                            'sparse_shape': [1600, 1600, 41],
-                            'output_channels': 128,
-                            'order': ['conv', 'norm', 'act'],
-                            'encoder_channels': [[16, 16, 32], [32, 32, 64], [64, 64, 128], [128, 128]],
-                            'encoder_paddings': [[0, 0, 1], [0, 0, 1], [0, 0, [1, 1, 0]], [0, 0]],
-                            'block_type': 'basicblock',
-                        },
+                },
+                'temporal_model': {
+                    'type': 'Temporal3DConvModel',
+                    'receptive_field': 3,
+                    'input_egopose': True,
+                    'in_channels': 256,
+                    'input_shape': [128, 128],
+                    'with_skip_connect': True,
+                    'start_out_channels': 256,
+                    'det_grid_conf': {
+                        'xbound': [-54.0, 54.0, 0.6],
+                        'ybound': [-54.0, 54.0, 0.6],
+                        'zbound': [-10.0, 10.0, 20.0],
+                        'dbound': [1.0, 60.0, 1.0],
                     },
-                    'temporal_model': {
-                        'type': 'Temporal3DConvModel',
-                        'receptive_field': 3,
-                        'input_egopose': True,
-                        'in_channels': 256,
-                        'input_shape': [200, 200],
-                        'with_skip_connect': True,
-                        'start_out_channels': 256,
-                        'det_grid_conf': {
-                            'xbound': [-54.0, 54.0, 0.6],
-                            'ybound': [-54.0, 54.0, 0.6],
-                            'zbound': [-10.0, 10.0, 20.0],
-                            'dbound': [1.0, 60.0, 1.0],
-                        },
-                        'grid_conf': {
-                            'xbound': [-50.0, 50.0, 0.5],
-                            'ybound': [-50.0, 50.0, 0.5],
-                            'zbound': [-10.0, 10.0, 20.0],
-                            'dbound': [1.0, 60.0, 1.0],
-                        },
+                    'grid_conf': {
+                        'xbound': [-51.2, 51.2, 0.8],
+                        'ybound': [-51.2, 51.2, 0.8],
+                        'zbound': [-10.0, 10.0, 20.0],
+                        'dbound': [1.0, 60.0, 1.0],
                     },
-                }
+                },
+            }
 
             self.encoders = nn.ModuleDict()
             if encoders["lidar"]["voxelize"].get("max_num_points", -1) > 0:
