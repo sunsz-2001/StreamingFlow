@@ -191,9 +191,9 @@ class streamingflow(nn.Module):
             x_range = point_cloud_range[3] - point_cloud_range[0]
             y_range = point_cloud_range[4] - point_cloud_range[1]
             z_range = point_cloud_range[5] - point_cloud_range[2]
-            x_size = int(round(x_range / voxel_size[0]))
-            y_size = int(round(y_range / voxel_size[1]))
-            z_size = int(round(z_range / voxel_size[2]))
+            x_size = int(np.floor((x_range / voxel_size[0]) + 0.5))
+            y_size = int(np.floor((y_range / voxel_size[1]) + 0.5))
+            z_size = int(np.floor((z_range / voxel_size[2]) + 0.5))
             sparse_shape = [z_size, y_size, x_size]  # [Z, Y, X]
 
             # 打印配置信息用于调试
