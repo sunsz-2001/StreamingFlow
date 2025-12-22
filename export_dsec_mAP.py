@@ -254,7 +254,10 @@ def export_and_eval(_cfg_path: str, checkpoint: str, dataroot: str, iou_thr: flo
     
     # 加载检查点并更新模型配置
     ckpt = torch.load(checkpoint, map_location="cpu")
-    trainer = TrainingModule.load_from_checkpoint(checkpoint, strict=False)
+    hparams = ckpt.get("hyper_parameters")
+    if hparams is None:
+        raise KeyError("Checkpoint is missing 'hyper_parameters'; cannot build model.")
+    trainer = TrainingModule(hparams)
     trainer.eval().to(device)
     
     # 更新模型的配置（使用配置文件中的配置，而不是检查点中的配置）

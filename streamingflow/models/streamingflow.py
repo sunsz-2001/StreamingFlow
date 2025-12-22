@@ -527,7 +527,7 @@ class streamingflow(nn.Module):
             return torch.zeros((0, self.encoders["lidar"]["backbone"].out_channels),
                              device=feats.device, dtype=feats.dtype)
 
-        batch_size = coords[-1, 0] + 1
+        batch_size = int(coords[-1, 0].item()) + 1
         
         # 【关键修复】坐标顺序转换
         # Voxelization 返回的格式是 [Batch, X, Y, Z]
