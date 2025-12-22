@@ -259,7 +259,8 @@ class GaussianFocalLoss(nn.Module):
         Returns:
             torch.Tensor: Feature map after sigmoid.
         """
-        y = torch.clamp(x.sigmoid_(), min=eps, max=1 - eps)
+        # Use out-of-place sigmoid to avoid modifying tensors required for autograd.
+        y = torch.clamp(x.sigmoid(), min=eps, max=1 - eps)
 
         return y
 

@@ -33,7 +33,8 @@ def clip_sigmoid(x, eps=1e-3):
     
     Using eps=1e-3 instead of 1e-4 to avoid extreme log values in loss computation.
     """
-    y = torch.clamp(x.sigmoid_(), min=eps, max=1 - eps)
+    # Use out-of-place sigmoid to avoid modifying tensors required for autograd.
+    y = torch.clamp(x.sigmoid(), min=eps, max=1 - eps)
     return y
 
 
@@ -313,7 +314,8 @@ class TransFusionHead(nn.Module):
             0, 2, 1
         )
         query_cat_encoding = self.class_encoding(one_hot.float())
-        query_feat += query_cat_encoding
+        # Avoid in-place modification in case query_feat is a view/shared-storage tensor.
+        query_feat = query_feat + query_cat_encoding
 
         query_pos = bev_pos.gather(
             index=top_proposals_index[:, None, :]
