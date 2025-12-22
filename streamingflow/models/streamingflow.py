@@ -194,14 +194,14 @@ class streamingflow(nn.Module):
             x_size = int(np.floor((x_range / voxel_size[0]) + 0.5))
             y_size = int(np.floor((y_range / voxel_size[1]) + 0.5))
             z_size = int(np.floor((z_range / voxel_size[2]) + 0.5))
-            sparse_shape = [x_size, y_size, z_size]  # [X, Y, Z]
+            sparse_shape = [z_size, y_size, x_size]  # [Z, Y, X]
 
             # 打印配置信息用于调试
             print("=" * 80)
             print("[DEBUG] LiDAR Encoder Configuration:")
             print(f"  point_cloud_range: {point_cloud_range} [x_min, y_min, z_min, x_max, y_max, z_max]")
             print(f"  voxel_size: {voxel_size} [x, y, z]")
-            print(f"  sparse_shape: {sparse_shape} [X, Y, Z]")
+            print(f"  sparse_shape: {sparse_shape} [Z, Y, X]")
             print(f"\n[DEBUG] Calculated grid sizes:")
             print(f"  X: ({point_cloud_range[3]} - {point_cloud_range[0]}) / {voxel_size[0]} = {x_range} / {voxel_size[0]} = {x_size}")
             print(f"  Y: ({point_cloud_range[4]} - {point_cloud_range[1]}) / {voxel_size[1]} = {y_range} / {voxel_size[1]} = {y_size}")
@@ -487,26 +487,36 @@ class streamingflow(nn.Module):
 
         batch_size = int(coords[-1, 0].item()) + 1
         
-        # 坐标顺序保持为 [batch_idx, X, Y, Z] 以匹配 voxelizer 输出
-        print(f"\n[DEBUG] Coordinate validation (no reordering):")
-        print(f"  Coords shape: {coords.shape}")
-        print(f"  Coords format: [batch_idx, X, Y, Z]")
+        # 坐标顺序转换为 [batch_idx, Z, Y, X] 以匹配 SparseEncoder 约定
+        print(f"\n[DEBUG] Before coordinate reordering:")
+        print(f"  Original coords shape: {coords.shape}")
+        print(f"  Original coords format: [batch_idx, X, Y, Z]")
         if coords.numel() > 0:
-            print(f"  First 5 coords: {coords[:min(5, len(coords))].cpu().numpy()}")
+            print(f"  First 5 original coords: {coords[:min(5, len(coords))].cpu().numpy()}")
+
+        coords = coords[:, [0, 3, 2, 1]].contiguous()
+
+        print(f"\n[DEBUG] After coordinate reordering:")
+        print(f"  Reordered coords shape: {coords.shape}")
+        print(f"  Reordered coords format: [batch_idx, Z, Y, X]")
+        if coords.numel() > 0:
+            print(f"  First 5 reordered coords: {coords[:min(5, len(coords))].cpu().numpy()}")
+
         if coords.shape[1] >= 4:
-            x_coords = coords[:, 1]
+            z_coords = coords[:, 1]
             y_coords = coords[:, 2]
-            z_coords = coords[:, 3]
+            x_coords = coords[:, 3]
             sparse_shape = self.encoders['lidar']['backbone'].sparse_shape
-            print(f"  X coords range: [{x_coords.min().item()}, {x_coords.max().item()}], sparse_shape[0] (X): {sparse_shape[0]}")
+            print(f"\n[DEBUG] Coordinate validation after reordering:")
+            print(f"  Z coords range: [{z_coords.min().item()}, {z_coords.max().item()}], sparse_shape[0] (Z): {sparse_shape[0]}")
             print(f"  Y coords range: [{y_coords.min().item()}, {y_coords.max().item()}], sparse_shape[1] (Y): {sparse_shape[1]}")
-            print(f"  Z coords range: [{z_coords.min().item()}, {z_coords.max().item()}], sparse_shape[2] (Z): {sparse_shape[2]}")
-            if x_coords.max().item() >= sparse_shape[0]:
-                print(f"[ERROR] X coordinate overflow: {x_coords.max().item()} >= {sparse_shape[0]}")
+            print(f"  X coords range: [{x_coords.min().item()}, {x_coords.max().item()}], sparse_shape[2] (X): {sparse_shape[2]}")
+            if z_coords.max().item() >= sparse_shape[0]:
+                print(f"[ERROR] Z coordinate overflow: {z_coords.max().item()} >= {sparse_shape[0]}")
             if y_coords.max().item() >= sparse_shape[1]:
                 print(f"[ERROR] Y coordinate overflow: {y_coords.max().item()} >= {sparse_shape[1]}")
-            if z_coords.max().item() >= sparse_shape[2]:
-                print(f"[ERROR] Z coordinate overflow: {z_coords.max().item()} >= {sparse_shape[2]}")
+            if x_coords.max().item() >= sparse_shape[2]:
+                print(f"[ERROR] X coordinate overflow: {x_coords.max().item()} >= {sparse_shape[2]}")
         
         print(f"\n[DEBUG] Before SparseEncoder forward:")
         print(f"  Features shape: {feats.shape}")
