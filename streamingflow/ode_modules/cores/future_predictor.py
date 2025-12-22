@@ -96,22 +96,24 @@ class FuturePredictionODE(nn.Module):
             times = torch.tensor(list(obs.keys()), device=future_prediction_input.device, dtype=future_prediction_input.dtype)
             observations = torch.stack(list(obs.values()), dim=1)
 
-            # ODE 模块会输出与 `target_timestamp` 对齐的隐 BEV 序列；
-            # `auxilary_loss` 包含在 NNFOwithBayesianJumps 内部估计的 KL 等正则项。
             # 生成未来时间点：从当前时间(0)到target_timestamp，等间隔生成n_future个点
             target_time = target_timestamp[bs]
+            # 确保转为 Python 标量 float，规避设备不匹配问题
             if torch.is_tensor(target_time):
-                target_time = target_time.item()
+                target_time = target_time.detach().cpu().item()
+            else:
+                target_time = float(target_time)
             
             # 生成 n_future 个等间隔的未来时间点
             # 例如：n_future=6, target_time=0.6 -> [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
             if self.n_future > 1:
                 time_step = target_time / self.n_future
+                # 先在 CPU 上完成基础序列生成，再搬移到对应设备，彻底规避 Device 转换问题
                 T = torch.arange(
                     1, self.n_future + 1, 
-                    dtype=future_prediction_input.dtype, 
-                    device=future_prediction_input.device
-                ) * time_step
+                    dtype=torch.float32, 
+                    device='cpu'
+                ).to(device=future_prediction_input.device, dtype=future_prediction_input.dtype) * time_step
             else:
                 # 如果只有1个未来帧，直接使用target_time
                 T = torch.tensor(
