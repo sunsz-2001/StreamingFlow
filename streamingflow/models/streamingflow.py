@@ -179,18 +179,47 @@ class streamingflow(nn.Module):
         if self.use_lidar:          
             # DSEC 点云为 (N, 4) [x, y, z, intensity]，因此 SparseEncoder 的 in_channels 设为 4
             if True:  # 当前激活的配置
+                point_cloud_range = [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
+                voxel_size = [0.1, 0.1, 0.2]
+                sparse_shape = [41, 1024, 1024]  # [Z, Y, X] 顺序
+                
+                # 打印配置信息用于调试
+                print("=" * 80)
+                print("[DEBUG] LiDAR Encoder Configuration:")
+                print(f"  point_cloud_range: {point_cloud_range} [x_min, y_min, z_min, x_max, y_max, z_max]")
+                print(f"  voxel_size: {voxel_size} [x, y, z]")
+                print(f"  sparse_shape: {sparse_shape} [Z, Y, X]")
+                
+                # 计算验证
+                x_range = point_cloud_range[3] - point_cloud_range[0]
+                y_range = point_cloud_range[4] - point_cloud_range[1]
+                z_range = point_cloud_range[5] - point_cloud_range[2]
+                x_size = int(round(x_range / voxel_size[0]))
+                y_size = int(round(y_range / voxel_size[1]))
+                z_size = int(round(z_range / voxel_size[2]))
+                
+                print(f"\n[DEBUG] Calculated grid sizes:")
+                print(f"  X: ({point_cloud_range[3]} - {point_cloud_range[0]}) / {voxel_size[0]} = {x_range} / {voxel_size[0]} = {x_size}")
+                print(f"  Y: ({point_cloud_range[4]} - {point_cloud_range[1]}) / {voxel_size[1]} = {y_range} / {voxel_size[1]} = {y_size}")
+                print(f"  Z: ({point_cloud_range[5]} - {point_cloud_range[2]}) / {voxel_size[2]} = {z_range} / {voxel_size[2]} = {z_size}")
+                print(f"\n[DEBUG] Expected sparse_shape [Z, Y, X]: [{z_size}, {y_size}, {x_size}]")
+                print(f"[DEBUG] Actual sparse_shape [Z, Y, X]: {sparse_shape}")
+                if sparse_shape != [z_size, y_size, x_size]:
+                    print(f"[WARNING] sparse_shape mismatch! Expected [{z_size}, {y_size}, {x_size}], got {sparse_shape}")
+                print("=" * 80)
+                
                 encoders = {
                     'lidar': {
                         'voxelize': {
                             'max_num_points': 10,
-                            'point_cloud_range': [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0],
-                            'voxel_size': [0.1, 0.1, 0.2],
+                            'point_cloud_range': point_cloud_range,
+                            'voxel_size': voxel_size,
                             'max_voxels': [90000, 120000],
                         },
                         'backbone': {
                             'type': 'SparseEncoder',
                             'in_channels': 4,  # 与 DSEC 点云通道数对齐
-                            'sparse_shape': [1024, 1024, 41],
+                            'sparse_shape': sparse_shape,
                             'output_channels': 128,
                             'order': ['conv', 'norm', 'act'],
                             'encoder_channels': [[16, 16, 32], [32, 32, 64], [64, 64, 128], [128, 128]],
@@ -344,13 +373,43 @@ class streamingflow(nn.Module):
     @force_fp32()
     def voxelize(self, points):
         feats, coords, sizes = [], [], []
+        # Determine target device for voxelization: prefer model parameter device if available,
+        # otherwise fall back to first input tensor's device or CUDA if available.
+        try:
+            target_device = next(self.parameters()).device
+        except StopIteration:
+            # no parameters registered yet; fallback
+            target_device = None
+
         for k, res in enumerate(points):
-            if res.device.type == 'cpu':
-                res = res.cuda()
+            # move input to target_device if determined; otherwise keep original device
+            if target_device is not None:
+                if not hasattr(res, 'device') or res.device != target_device:
+                    try:
+                        res = res.to(device=target_device)
+                    except Exception:
+                        # fallback to cuda if target_device unavailable
+                        if torch.cuda.is_available():
+                            res = res.cuda()
+            else:
+                # no model device known yet; prefer CUDA if available
+                if hasattr(res, 'device') and res.device.type == 'cpu' and torch.cuda.is_available():
+                    res = res.cuda()
 
             # Skip empty point clouds to avoid CUDA kernel errors
             if res.numel() == 0 or res.shape[0] == 0:
+                print(f"[DEBUG] Skipping empty point cloud at batch index {k}")
                 continue
+
+            # 打印输入点云信息
+            if k == 0:  # 只打印第一个样本的详细信息
+                print(f"\n[DEBUG] Voxelize input (batch {k}):")
+                print(f"  Point cloud shape: {res.shape}")
+                if res.numel() > 0:
+                    print(f"  Point cloud range:")
+                    print(f"    X: [{res[:, 0].min().item():.2f}, {res[:, 0].max().item():.2f}]")
+                    print(f"    Y: [{res[:, 1].min().item():.2f}, {res[:, 1].max().item():.2f}]")
+                    print(f"    Z: [{res[:, 2].min().item():.2f}, {res[:, 2].max().item():.2f}]")
 
             ret = self.encoders["lidar"]["voxelize"](res)
             if len(ret) == 3:
@@ -360,13 +419,94 @@ class streamingflow(nn.Module):
                 assert len(ret) == 2
                 f, c = ret
                 n = None
+            
+            # 打印 Voxelization 返回的坐标格式
+            if k == 0 and c.numel() > 0:
+                print(f"\n[DEBUG] Voxelization output (batch {k}):")
+                print(f"  Features shape: {f.shape}")
+                print(f"  Coords shape: {c.shape}")
+                print(f"  Coords dtype: {c.dtype}")
+                print(f"  Coords device: {c.device}")
+                print(f"  First 5 coords (before batch_idx padding):")
+                print(f"    {c[:min(5, len(c))]}")
+                print(f"  Coords range:")
+                if c.shape[1] >= 3:
+                    print(f"    Dim 0: [{c[:, 0].min().item()}, {c[:, 0].max().item()}]")
+                    print(f"    Dim 1: [{c[:, 1].min().item()}, {c[:, 1].max().item()}]")
+                    print(f"    Dim 2: [{c[:, 2].min().item()}, {c[:, 2].max().item()}]")
+                if n is not None:
+                    print(f"  Num points per voxel: min={n.min().item()}, max={n.max().item()}, mean={n.float().mean().item():.2f}")
+            
             feats.append(f)
-            coords.append(F.pad(c, (1, 0), mode="constant", value=k))
+            # 添加 batch_idx 到 coords 前面: [batch_idx, x, y, z] 或 [batch_idx, z, y, x]
+            padded_c = F.pad(c, (1, 0), mode="constant", value=k)
+            coords.append(padded_c)
+            
+            # 打印添加 batch_idx 后的坐标
+            if k == 0 and padded_c.numel() > 0:
+                print(f"\n[DEBUG] Coords after batch_idx padding (batch {k}):")
+                print(f"  Shape: {padded_c.shape}")
+                print(f"  First 5 coords: {padded_c[:min(5, len(padded_c))]}")
+                print(f"  Coords range:")
+                print(f"    Batch idx (dim 0): [{padded_c[:, 0].min().item()}, {padded_c[:, 0].max().item()}]")
+                if padded_c.shape[1] >= 4:
+                    print(f"    Dim 1: [{padded_c[:, 1].min().item()}, {padded_c[:, 1].max().item()}]")
+                    print(f"    Dim 2: [{padded_c[:, 2].min().item()}, {padded_c[:, 2].max().item()}]")
+                    print(f"    Dim 3: [{padded_c[:, 3].min().item()}, {padded_c[:, 3].max().item()}]")
+            
             if n is not None:
                 sizes.append(n)
 
+        if len(feats) == 0:
+            print("[WARNING] No valid voxels generated from any point cloud!")
+            return torch.empty((0, 0), device=points[0].device if len(points) > 0 else torch.device('cuda')), \
+                   torch.empty((0, 4), dtype=torch.int32, device=points[0].device if len(points) > 0 else torch.device('cuda')), \
+                   torch.empty((0,), dtype=torch.int32, device=points[0].device if len(points) > 0 else torch.device('cuda'))
+        
         feats = torch.cat(feats, dim=0)
         coords = torch.cat(coords, dim=0)
+        
+        # 打印合并后的坐标信息
+        print(f"\n[DEBUG] Final concatenated coords:")
+        print(f"  Total voxels: {len(coords)}")
+        print(f"  Coords shape: {coords.shape}")
+        print(f"  Coords range:")
+        print(f"    Batch idx (dim 0): [{coords[:, 0].min().item()}, {coords[:, 0].max().item()}]")
+        if coords.shape[1] >= 4:
+            print(f"    Dim 1: [{coords[:, 1].min().item()}, {coords[:, 1].max().item()}]")
+            print(f"    Dim 2: [{coords[:, 2].min().item()}, {coords[:, 2].max().item()}]")
+            print(f"    Dim 3: [{coords[:, 3].min().item()}, {coords[:, 3].max().item()}]")
+        
+        # 获取 sparse_shape 用于验证
+        sparse_shape = self.encoders["lidar"]["backbone"].sparse_shape
+        print(f"\n[DEBUG] SparseEncoder sparse_shape: {sparse_shape} [Z, Y, X]")
+        print(f"[DEBUG] Checking if coords are within sparse_shape bounds:")
+        if coords.shape[1] >= 4:
+            # coords 格式: [batch_idx, coord1, coord2, coord3]
+            # 需要确认 coord1, coord2, coord3 对应的是 [x, y, z] 还是 [z, y, x]
+            coord1_max = coords[:, 1].max().item()
+            coord2_max = coords[:, 2].max().item()
+            coord3_max = coords[:, 3].max().item()
+            print(f"  Coord dim 1 max: {coord1_max}, sparse_shape[2] (X): {sparse_shape[2]}")
+            print(f"  Coord dim 2 max: {coord2_max}, sparse_shape[1] (Y): {sparse_shape[1]}")
+            print(f"  Coord dim 3 max: {coord3_max}, sparse_shape[0] (Z): {sparse_shape[0]}")
+            
+            # 检查是否越界（假设格式是 [batch_idx, x, y, z]）
+            if coord1_max >= sparse_shape[2]:
+                print(f"[ERROR] Coord dim 1 ({coord1_max}) >= sparse_shape[2] ({sparse_shape[2]}) - X axis overflow!")
+            if coord2_max >= sparse_shape[1]:
+                print(f"[ERROR] Coord dim 2 ({coord2_max}) >= sparse_shape[1] ({sparse_shape[1]}) - Y axis overflow!")
+            if coord3_max >= sparse_shape[0]:
+                print(f"[ERROR] Coord dim 3 ({coord3_max}) >= sparse_shape[0] ({sparse_shape[0]}) - Z axis overflow!")
+            
+            # 检查是否越界（假设格式是 [batch_idx, z, y, x]）
+            if coord1_max >= sparse_shape[0]:
+                print(f"[ERROR] Coord dim 1 ({coord1_max}) >= sparse_shape[0] ({sparse_shape[0]}) - Z axis overflow (if format is [b,z,y,x])!")
+            if coord2_max >= sparse_shape[1]:
+                print(f"[ERROR] Coord dim 2 ({coord2_max}) >= sparse_shape[1] ({sparse_shape[1]}) - Y axis overflow (if format is [b,z,y,x])!")
+            if coord3_max >= sparse_shape[2]:
+                print(f"[ERROR] Coord dim 3 ({coord3_max}) >= sparse_shape[2] ({sparse_shape[2]}) - X axis overflow (if format is [b,z,y,x])!")
+        
         if len(sizes) > 0:
             sizes = torch.cat(sizes, dim=0)
             if self.voxelize_reduce:
@@ -382,13 +522,136 @@ class streamingflow(nn.Module):
 
         # Check if coords is empty to avoid CUDA kernel launch error
         if coords.numel() == 0:
+            print("[WARNING] Empty coords, returning empty tensor")
             # Return empty tensor with appropriate shape
             return torch.zeros((0, self.encoders["lidar"]["backbone"].out_channels),
                              device=feats.device, dtype=feats.dtype)
 
         batch_size = coords[-1, 0] + 1
-        x = self.encoders["lidar"]["backbone"](feats, coords, batch_size, sizes=sizes)
+        
+        # 【关键修复】坐标顺序转换
+        # Voxelization 返回的格式是 [Batch, X, Y, Z]
+        # SparseEncoder 期望的格式是 [Batch, Z, Y, X]
+        # 使用索引重排: [0, 3, 2, 1] 将 (Batch, X, Y, Z) -> (Batch, Z, Y, X)
+        print(f"\n[DEBUG] Before coordinate reordering:")
+        print(f"  Original coords shape: {coords.shape}")
+        print(f"  Original coords format: [batch_idx, X, Y, Z]")
+        if coords.numel() > 0:
+            print(f"  First 5 original coords: {coords[:min(5, len(coords))].cpu().numpy()}")
+        
+        # 重排坐标: [Batch, X, Y, Z] -> [Batch, Z, Y, X]
+        coords = coords[:, [0, 3, 2, 1]]
+        
+        print(f"\n[DEBUG] After coordinate reordering:")
+        print(f"  Reordered coords shape: {coords.shape}")
+        print(f"  Reordered coords format: [batch_idx, Z, Y, X]")
+        if coords.numel() > 0:
+            print(f"  First 5 reordered coords: {coords[:min(5, len(coords))].cpu().numpy()}")
+        
+        # 验证重排后的坐标是否在范围内
+        if coords.shape[1] >= 4:
+            z_coords = coords[:, 1]
+            y_coords = coords[:, 2]
+            x_coords = coords[:, 3]
+            sparse_shape = self.encoders['lidar']['backbone'].sparse_shape
+            print(f"\n[DEBUG] Coordinate validation after reordering:")
+            print(f"  Z coords range: [{z_coords.min().item()}, {z_coords.max().item()}], sparse_shape[0] (Z): {sparse_shape[0]}")
+            print(f"  Y coords range: [{y_coords.min().item()}, {y_coords.max().item()}], sparse_shape[1] (Y): {sparse_shape[1]}")
+            print(f"  X coords range: [{x_coords.min().item()}, {x_coords.max().item()}], sparse_shape[2] (X): {sparse_shape[2]}")
+            
+            if z_coords.max().item() >= sparse_shape[0]:
+                print(f"[ERROR] Z coordinate overflow: {z_coords.max().item()} >= {sparse_shape[0]}")
+            if y_coords.max().item() >= sparse_shape[1]:
+                print(f"[ERROR] Y coordinate overflow: {y_coords.max().item()} >= {sparse_shape[1]}")
+            if x_coords.max().item() >= sparse_shape[2]:
+                print(f"[ERROR] X coordinate overflow: {x_coords.max().item()} >= {sparse_shape[2]}")
+        
+        print(f"\n[DEBUG] Before SparseEncoder forward:")
+        print(f"  Features shape: {feats.shape}")
+        print(f"  Coords shape: {coords.shape}")
+        print(f"  Batch size: {batch_size}")
+        print(f"  SparseEncoder sparse_shape: {self.encoders['lidar']['backbone'].sparse_shape}")
+        
+        try:
+            x = self.encoders["lidar"]["backbone"](feats, coords, batch_size, sizes=sizes)
+            print(f"[DEBUG] SparseEncoder forward succeeded!")
+            print(f"  Output shape: {x.shape}")
+            return x
+        except RuntimeError as e:
+            print(f"\n[ERROR] SparseEncoder forward failed!")
+            print(f"  Error: {e}")
+            print(f"  Coords shape: {coords.shape}")
+            print(f"  Coords dtype: {coords.dtype}")
+            print(f"  Coords device: {coords.device}")
+            if coords.numel() > 0:
+                print(f"  Coords sample (first 10):")
+                try:
+                    print(f"    {coords[:min(10, len(coords))].cpu().numpy()}")
+                except:
+                    print(f"    (Unable to print coords due to CUDA error)")
+            print(f"  SparseEncoder sparse_shape: {self.encoders['lidar']['backbone'].sparse_shape}")
+            raise
 
+    def extract_lidar_features_time_series(self, points, T=None):
+        """
+        Accepts:
+            points: list[list[Tensor]] or list[Tensor] or torch.Tensor/np.ndarray
+            T: optional target number of time steps (defaults to self.receptive_field)
+        Returns:
+            x: Tensor of shape [B, T, C, H, W]
+        """
+        if T is None:
+            T = self.receptive_field
+
+        # Normalize inputs to list form
+        if torch.is_tensor(points) or isinstance(points, np.ndarray):
+            pts_batch = [[torch.from_numpy(points).to(dtype=torch.float32)] if isinstance(points, np.ndarray) else [points.to(dtype=torch.float32)]]
+        elif isinstance(points, (list, tuple)) and len(points) > 0 and not isinstance(points[0], (list, tuple)):
+            # list[Tensor] -> treat as B samples single time-step
+            pts_batch = [[p.to(dtype=torch.float32) if torch.is_tensor(p) else torch.from_numpy(p).to(dtype=torch.float32)] for p in points]
+        else:
+            # assume list[list[Tensor]]
+            pts_batch = []
+            for sample_points in points:
+                if isinstance(sample_points, (list, tuple)):
+                    sample_norm = []
+                    for p in sample_points:
+                        # unwrap nested one level if needed
+                        while isinstance(p, (list, tuple)) and len(p) > 0:
+                            p = p[0]
+                        if isinstance(p, np.ndarray):
+                            p = torch.from_numpy(p)
+                        if not torch.is_tensor(p):
+                            raise TypeError(f"Expected point cloud to be Tensor or np.ndarray, but got {type(p)}")
+                        sample_norm.append(p.to(dtype=torch.float32))
+                    pts_batch.append(sample_norm)
+                else:
+                    # single tensor entry
+                    p = sample_points
+                    if isinstance(p, np.ndarray):
+                        p = torch.from_numpy(p)
+                    if not torch.is_tensor(p):
+                        raise TypeError(f"Expected point cloud to be Tensor or np.ndarray, but got {type(p)}")
+                    pts_batch.append([p.to(dtype=torch.float32)])
+
+        B = len(pts_batch)
+        features = []
+        for t in range(T):
+            # build batch for this time step
+            pts_t = []
+            for s in range(B):
+                sample_pts = pts_batch[s]
+                if t < len(sample_pts):
+                    p = sample_pts[t]
+                else:
+                    p = sample_pts[-1]
+                pts_t.append(p.to(dtype=torch.float32))
+
+            # extract features for this time step (returns [B, C, H, W])
+            feat_t = self.extract_lidar_features(pts_t)
+            features.append(feat_t)
+
+        x = torch.stack(features, dim=1)  # [B, T, C, H, W]
         return x
 
     def forward(self, image, intrinsics, extrinsics, future_egomotion, padded_voxel_points=None, camera_timestamp=None, points=None,lidar_timestamp=None, target_timestamp=None,
@@ -422,6 +685,17 @@ class streamingflow(nn.Module):
                             )
                         norm_sample_points = []
                         for t, pc in enumerate(sample_points):
+                            # Accept nested lists/tuples but DO NOT flatten time dimension.
+                            # If an element is a list (e.g. [[tensor]]), unwrap inner-most tensor,
+                            # but preserve that this sample has multiple time steps.
+                            while isinstance(pc, (list, tuple)) and len(pc) > 0:
+                                # drill down one level; if inner element is still list, stop
+                                # to preserve explicit time-step lists above this level.
+                                inner = pc[0]
+                                if isinstance(inner, (list, tuple)):
+                                    break
+                                pc = inner
+
                             if isinstance(pc, np.ndarray):
                                 pc = torch.from_numpy(pc)
                             if not torch.is_tensor(pc):
@@ -464,26 +738,8 @@ class streamingflow(nn.Module):
             if isinstance(first_point, list):
                 # 格式：points = [[t0_pc, t1_pc, t2_pc], [t0_pc, t1_pc, t2_pc], ...]
                 # 每个样本有 T 个时间步的点云
-                B = len(points)
-                # 按时间步处理：对每个时间步，提取所有 batch 样本的点云
-                features = []
-                for t in range(T):
-                    # 提取所有 batch 样本在时间步 t 的点云
-                    points_t = [sample_points[t] if t < len(sample_points) else sample_points[-1] 
-                               for sample_points in points]
-                    # 标准化点云格式
-                    norm_points_t = []
-                    for p in points_t:
-                        if isinstance(p, np.ndarray):
-                            p = torch.from_numpy(p)
-                        if not torch.is_tensor(p):
-                            raise TypeError(f"Expected point cloud to be Tensor or np.ndarray, but got {type(p)}")
-                        norm_points_t.append(p.to(dtype=torch.float32))
-                    # 对时间步 t 的所有 batch 样本进行特征提取
-                    feature_t = self.extract_lidar_features(norm_points_t)  # [B, C, H, W]
-                    features.append(feature_t)
-                # 堆叠所有时间步：[B, T, C, H, W]
-                x = torch.stack(features, dim=1)  # [B, T, C, H, W]
+                # 使用集中式方法在模型端逐时间步体素化
+                x = self.extract_lidar_features_time_series(points, T=T)  # [B, T, C, H, W]
             else:
                 # 格式：points = [pc0, pc1, pc2, ...]（每个样本一个点云，TIME_RECEPTIVE_FIELD=1）
                 B = len(points)
@@ -551,6 +807,32 @@ class streamingflow(nn.Module):
                 event_in["frames"] = event["frames"][:, :self.receptive_field].contiguous()
             else:
                 event_in = event
+
+        # Ensure future_egomotion has same temporal length as intrinsics (s)
+        # so downstream projection_to_birds_eye_view indexing won't go out of bounds.
+        # If future_egomotion has fewer timesteps, repeat the last one; if more, truncate.
+        try:
+            s = intrinsics_rf.shape[1]
+            if future_egomotion is None:
+                future_egomotion = torch.zeros((intrinsics_rf.shape[0], s, 6), device=intrinsics_rf.device, dtype=torch.float32)
+            else:
+                if isinstance(future_egomotion, np.ndarray):
+                    future_egomotion = torch.from_numpy(future_egomotion)
+                if future_egomotion.dim() == 2:
+                    future_egomotion = future_egomotion.unsqueeze(1)
+                future_egomotion = future_egomotion.to(device=intrinsics_rf.device, dtype=torch.float32)
+                cur_s = future_egomotion.shape[1]
+                if cur_s < s:
+                    last = future_egomotion[:, -1:, :].expand(future_egomotion.shape[0], s - cur_s, 6)
+                    future_egomotion = torch.cat([future_egomotion, last], dim=1)
+                elif cur_s > s:
+                    future_egomotion = future_egomotion[:, :s, :].contiguous()
+        except Exception:
+            # Fallback: ensure shape is at least (B, s, 6)
+            try:
+                future_egomotion = future_egomotion.to(device=intrinsics_rf.device, dtype=torch.float32)
+            except Exception:
+                future_egomotion = torch.zeros((intrinsics_rf.shape[0], intrinsics_rf.shape[1], 6), device=intrinsics_rf.device, dtype=torch.float32)
 
         modality_outputs = self.calculate_birds_eye_view_features(
             intrinsics_rf,
@@ -1160,20 +1442,6 @@ class streamingflow(nn.Module):
             
             # [B, S, N, C, H, W] -> [B*S*N, C, H, W]
             event_reshaped = event_frames.view(b * s * n, c, h, w)
-            
-            # 【数值稳定性】裁剪输入数据，防止 Inf/NaN
-            # 事件数据可能包含异常大的值，需要裁剪到合理范围
-            # 使用较大的范围（-1000 到 1000）以保留大部分信息，但防止极端值
-            event_reshaped = torch.clamp(event_reshaped, min=-1000.0, max=1000.0)
-            
-            # 检查是否仍有 Inf/NaN（理论上不应该有，但作为安全检查）
-            if torch.isnan(event_reshaped).any() or torch.isinf(event_reshaped).any():
-                print(f"[WARNING] Event data contains NaN/Inf after clamping. Replacing with zeros.")
-                event_reshaped = torch.where(
-                    torch.isnan(event_reshaped) | torch.isinf(event_reshaped),
-                    torch.zeros_like(event_reshaped),
-                    event_reshaped
-                )
             
             # 编码器前向传播: [B*S*N, C, H, W] -> [B*S*N, out_channels, H', W']
             event_feats, event_depth_logits = self.event_encoder_forward(event_reshaped)

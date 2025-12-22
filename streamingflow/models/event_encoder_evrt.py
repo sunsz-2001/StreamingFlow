@@ -40,6 +40,35 @@ def _parse_backbone_depth(backbone: str) -> int:
     raise ValueError(f"Unsupported backbone spec: {backbone}")
 
 
+def _convert_bn_to_gn(module: nn.Module, num_groups_default: int = 32) -> nn.Module:
+    """
+    Recursively convert all BatchNorm2d layers in a module to GroupNorm.
+
+    Notes:
+        - GroupNorm does not depend on batch statistics, which makes it more
+          stable for sparse / event-based data and small batch sizes.
+        - We choose the number of groups such that it divides num_channels.
+          If that is not possible, we fall back to per-channel normalization
+          (num_groups == num_channels), which is equivalent to InstanceNorm
+          without running stats.
+    """
+    for name, child in list(module.named_children()):
+        if isinstance(child, nn.BatchNorm2d):
+            num_channels = child.num_features
+            # Start from default groups and find a divisor of num_channels.
+            num_groups = min(num_groups_default, num_channels)
+            while num_groups > 1 and (num_channels % num_groups != 0):
+                num_groups //= 2
+            if num_groups <= 1:
+                # Fallback: one group per channel (InstanceNorm-like behaviour)
+                num_groups = num_channels
+            gn = nn.GroupNorm(num_groups=num_groups, num_channels=num_channels, affine=True)
+            setattr(module, name, gn)
+        else:
+            _convert_bn_to_gn(child, num_groups_default=num_groups_default)
+    return module
+
+
 class EventEncoderEvRT(nn.Module):
     """Wraps EvRT-DETR backbone + HybridEncoder to produce stride-8 event features."""
 
@@ -54,6 +83,7 @@ class EventEncoderEvRT(nn.Module):
         if in_channels <= 0:
             in_channels = 2 * bins
         backbone_depth = _parse_backbone_depth(getattr(cfg, "BACKBONE", 50))
+        # 在当前设置下我们从头训练，因此不依赖预训练权重
         pretrained = getattr(cfg, "PRETRAINED", False)
         freeze_backbone = getattr(cfg, "FREEZE_BACKBONE", False)
         hybrid_hidden = getattr(cfg, "HIDDEN_DIM", 256)
@@ -69,6 +99,10 @@ class EventEncoderEvRT(nn.Module):
             return_idx=return_idx,
             pretrained=pretrained,
         )
+        # 如果不用预训练权重，从头训练时将 backbone 内部的 BatchNorm2d 替换为 GroupNorm，
+        # 以提升在稀疏事件数据和小 batch 下的数值稳定性。
+        if not pretrained:
+            self.backbone = _convert_bn_to_gn(self.backbone, num_groups_default=32)
 
         if freeze_backbone:
             for param in self.backbone.parameters():

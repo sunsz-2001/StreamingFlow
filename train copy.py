@@ -7,7 +7,7 @@ import pytorch_lightning as pl
 from pytorch_lightning.plugins import DDPPlugin
 from pytorch_lightning.callbacks import ModelCheckpoint
 
-from streamingflow.config import get_parser, get_cfg
+from streamingflow.config_cz import get_parser, get_cfg
 from streamingflow.datas.dataloaders import prepare_dataloaders
 from streamingflow.trainer_dsec import TrainingModule
 
