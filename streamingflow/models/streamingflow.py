@@ -999,12 +999,17 @@ class streamingflow(nn.Module):
             # FuturePredictionODE 会接收 camera_states 和 lidar_states 及其时间戳，
             # 按时间戳排序后进行异步融合和预测
             # 注意：camera_states 和 lidar_states 已经统一到标准尺寸，空间尺寸一致
+            
+            # 对齐 timestamp 到 receptive_field，防止在 FuturePredictionODE 中索引越界
+            camera_timestamp_ode = camera_timestamp[:, :self.receptive_field] if camera_timestamp is not None else None
+            lidar_timestamp_ode = lidar_timestamp[:, :self.receptive_field] if lidar_timestamp is not None else None
+
             future_states, auxilary_loss = self.future_prediction_ode(
                 future_prediction_input,  # 已经是标准尺寸
                 camera_states_for_ode,    # 已经是标准尺寸
                 lidar_states_for_ode,     # 已经是标准尺寸
-                camera_timestamp,
-                lidar_timestamp,
+                camera_timestamp_ode,
+                lidar_timestamp_ode,
                 target_timestamp,
                 camera_states_hi=camera_states_hi,
                 camera_timestamp_hi=camera_timestamp_hi,

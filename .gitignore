@@ -140,3 +140,4 @@ logs/
 checkpoints/
 *.mp4
 pretrained/
+.promptx/
