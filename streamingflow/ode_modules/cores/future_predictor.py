@@ -72,42 +72,66 @@ class FuturePredictionODE(nn.Module):
         batch_size = future_prediction_input.shape[0]
         for bs in range(batch_size):
             obs_feature_with_time = {}
+            
+            # --- 时间归一化逻辑 ---
+            # 1. 收集当前 batch 所有相关的绝对时间戳，找到 t0 (最小值)
+            all_timestamps = []
+            if camera_timestamp is not None:
+                # 假设 camera_timestamp 是 [B, T]
+                all_timestamps.extend(camera_timestamp[bs].detach().cpu().numpy().tolist())
+            if lidar_timestamp is not None:
+                all_timestamps.extend(lidar_timestamp[bs].detach().cpu().numpy().tolist())
+            
+            # 找到起始时间 t0 (防止空列表错误)
+            t0 = min(all_timestamps) if all_timestamps else 0.0
+            
+            # 定义时间缩放因子：将微秒 (us) 转换为秒 (s)，以匹配 delta_t=0.05
+            TIME_SCALE = 1e-6
+
             if camera_states is not None:
                 for index in range(camera_timestamp.shape[1]):
-                    # 将时间戳转换为 Python 标量，避免设备不匹配问题
-                    ts = camera_timestamp[bs, index].item() if torch.is_tensor(camera_timestamp[bs, index]) else float(camera_timestamp[bs, index])
-                    obs_feature_with_time[ts] = camera_states[bs, index].unsqueeze(0)
+                    # 获取原始绝对时间戳
+                    ts_raw = camera_timestamp[bs, index].item() if torch.is_tensor(camera_timestamp[bs, index]) else float(camera_timestamp[bs, index])
+                    # 转换为相对秒：(t - t0) * 1e-6
+                    ts_rel = (ts_raw - t0) * TIME_SCALE
+                    obs_feature_with_time[ts_rel] = camera_states[bs, index].unsqueeze(0)
+            
             if lidar_states is not None:
                 for index in range(lidar_timestamp.shape[1]):
-                    # 将时间戳转换为 Python 标量，避免设备不匹配问题
-                    ts = lidar_timestamp[bs, index].item() if torch.is_tensor(lidar_timestamp[bs, index]) else float(lidar_timestamp[bs, index])
-                    obs_feature_with_time[ts] = lidar_states[bs, index].unsqueeze(0)
+                    ts_raw = lidar_timestamp[bs, index].item() if torch.is_tensor(lidar_timestamp[bs, index]) else float(lidar_timestamp[bs, index])
+                    ts_rel = (ts_raw - t0) * TIME_SCALE
+                    obs_feature_with_time[ts_rel] = lidar_states[bs, index].unsqueeze(0)
+            
             if camera_states_hi is not None and camera_timestamp_hi is not None:
                 for index in range(camera_timestamp_hi.shape[1]):
-                    # 将时间戳转换为 Python 标量，避免设备不匹配问题
-                    ts = camera_timestamp_hi[bs, index].item() if torch.is_tensor(camera_timestamp_hi[bs, index]) else float(camera_timestamp_hi[bs, index])
-                    obs_feature_with_time[ts] = camera_states_hi[bs, index].unsqueeze(0)
+                    ts_raw = camera_timestamp_hi[bs, index].item() if torch.is_tensor(camera_timestamp_hi[bs, index]) else float(camera_timestamp_hi[bs, index])
+                    ts_rel = (ts_raw - t0) * TIME_SCALE
+                    obs_feature_with_time[ts_rel] = camera_states_hi[bs, index].unsqueeze(0)
 
             # 不同传感器可能拥有相同时间戳；排序可确保按时间顺序送入 ODE。
             # 若同一时间戳出现多个观测，后插入的会覆盖先前的，起到简单的融合作用。
-            # 现在字典的 key 是 Python 标量，排序不会有设备问题
+            # 现在字典的 key 是 Python 标量 (相对秒)，排序不会有设备问题
             obs = dict(sorted(obs_feature_with_time.items(), key=lambda v: v[0]))
             # 使用模型输入的 dtype 和 device，避免类型不一致。
             times = torch.tensor(list(obs.keys()), device=future_prediction_input.device, dtype=future_prediction_input.dtype)
             observations = torch.stack(list(obs.values()), dim=1)
 
             # 生成未来时间点：从当前时间(0)到target_timestamp，等间隔生成n_future个点
-            target_time = target_timestamp[bs]
-            # 确保转为 Python 标量 float，规避设备不匹配问题
-            if torch.is_tensor(target_time):
-                target_time = target_time.detach().cpu().item()
+            target_time_raw = target_timestamp[bs]
+            # 确保转为 Python 标量 float
+            if torch.is_tensor(target_time_raw):
+                target_time_raw = target_time_raw.detach().cpu().item()
             else:
-                target_time = float(target_time)
+                target_time_raw = float(target_time_raw)
+            
+            # 归一化 target_time: (target - t0) * 1e-6
+            target_time_rel = (target_time_raw - t0) * TIME_SCALE
             
             # 生成 n_future 个等间隔的未来时间点
-            # 例如：n_future=6, target_time=0.6 -> [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
             if self.n_future > 1:
-                time_step = target_time / self.n_future
+                # 使用相对的目标时间计算步长
+                time_step = target_time_rel / self.n_future
+                
                 # 先在 CPU 上完成基础序列生成，再搬移到对应设备，彻底规避 Device 转换问题
                 T = torch.arange(
                     1, self.n_future + 1, 
@@ -115,9 +139,9 @@ class FuturePredictionODE(nn.Module):
                     device='cpu'
                 ).to(device=future_prediction_input.device, dtype=future_prediction_input.dtype) * time_step
             else:
-                # 如果只有1个未来帧，直接使用target_time
+                # 如果只有1个未来帧，直接使用相对的目标时间
                 T = torch.tensor(
-                    [target_time], 
+                    [target_time_rel], 
                     dtype=future_prediction_input.dtype, 
                     device=future_prediction_input.device
                 )
