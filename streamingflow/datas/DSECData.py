@@ -1301,6 +1301,8 @@ class DatasetDSEC(torch.utils.data.Dataset):
         
         # target_idx_list is a list, use the first element as the base index
         base_idx = target_idx_list[0] if isinstance(target_idx_list, (list, np.ndarray)) else target_idx_list
+        # base timestamp (microseconds) for this flow window - used to normalize lidar timestamps to seconds
+        base_us = self.infos[base_idx]['time_stamp']
         
         # 确保使用正确的键名（get_events_grid 返回 'events_grid'）
         event_grid_key = 'events_grid' if 'events_grid' in data_dict else 'event_grid'
@@ -1343,7 +1345,8 @@ class DatasetDSEC(torch.utils.data.Dataset):
                     if event_idx == 0 and self.use_lidar:
                         if 'points' in data_dict:
                             flow_dict['flow_lidar'].append(data_dict['points'])
-                            flow_dict['lidar_stmp'].append(self.infos[base_idx]['time_stamp'])
+                            # normalize lidar timestamp to seconds relative to base_us
+                            flow_dict['lidar_stmp'].append((self.infos[base_idx]['time_stamp'] - base_us) / 1e6)
                     # 如果事件数量足够多（>=10），在第10个事件时添加下一个时间步的点云
                     # 否则在最后一个事件时添加
                     elif event_idx == min(10, actual_event_num - 1) and actual_event_num > 1 and self.use_lidar:
@@ -1351,7 +1354,8 @@ class DatasetDSEC(torch.utils.data.Dataset):
                         if base_idx + 1 < len(self.infos):
                             _, points = self.get_infos_and_points([base_idx+1])
                             flow_dict['flow_lidar'].append(points[0])
-                            flow_dict['lidar_stmp'].append(self.infos[base_idx+1]['time_stamp'])
+                            # normalize next-frame lidar timestamp to seconds relative to base_us
+                            flow_dict['lidar_stmp'].append((self.infos[base_idx+1]['time_stamp'] - base_us) / 1e6)
                     
                     flow_dict['flow_events'].append(event_grid[event_idx])
                     flow_dict['events_stmp'].append(evs_stmp[event_idx])
