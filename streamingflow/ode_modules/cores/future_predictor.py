@@ -99,8 +99,8 @@ class FuturePredictionODE(nn.Module):
             # 找到起始时间 t0 (防止空列表错误)
             t0 = min(all_timestamps) if all_timestamps else 0.0
             
-            # 定义时间缩放因子：将微秒 (us) 转换为秒 (s)，以匹配 delta_t=0.05
-            TIME_SCALE = 1e-6
+            # 定义时间缩放因子：时间戳已是相对秒，保持尺度以匹配 delta_t=0.05
+            TIME_SCALE = 1.0
 
             if camera_states is not None:
                 for index in range(camera_timestamp.shape[1]):

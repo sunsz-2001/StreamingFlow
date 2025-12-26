@@ -1358,7 +1358,9 @@ class DatasetDSEC(torch.utils.data.Dataset):
                             flow_dict['lidar_stmp'].append((self.infos[base_idx+1]['time_stamp'] - base_us) / 1e6)
                     
                     flow_dict['flow_events'].append(event_grid[event_idx])
-                    flow_dict['events_stmp'].append(evs_stmp[event_idx])
+                    # Normalize event timestamps to seconds relative to base_us for ODE alignment.
+                    event_ts_rel = (evs_stmp[event_idx] - base_us) / 1e6
+                    flow_dict['events_stmp'].append(event_ts_rel)
                     
                 flow_dict['target_timestamp'] = flow_dict['events_stmp'][-1:]
                 intrinsics = data_dict['intrinsics']
