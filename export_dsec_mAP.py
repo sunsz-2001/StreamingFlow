@@ -172,8 +172,28 @@ def gather_batch_outputs(model, batch, device, cfg=None, decode: bool = True) ->
     # decoded: [[boxes, scores, labels]] - 外层是layer，内层是batch
     # 当前batch_size=1，所以 decoded[0] = [boxes, scores, labels]
     preds = []
+
+    # 调试标志：只打印一次
+    global _debug_gather_printed
+    if '_debug_gather_printed' not in dir():
+        _debug_gather_printed = False
+
     for layer_result in decoded:  # 通常只有1个layer
         boxes, scores, labels = layer_result
+
+        # 调试：打印 labels 的信息（仅首次）
+        if not _debug_gather_printed:
+            print(f"\n[DEBUG gather_batch_outputs] ===")
+            print(f"  decoded structure: {type(decoded)}, len={len(decoded)}")
+            print(f"  layer_result structure: {type(layer_result)}, len={len(layer_result)}")
+            print(f"  boxes type: {type(boxes)}, tensor shape: {boxes.tensor.shape if hasattr(boxes, 'tensor') else 'N/A'}")
+            print(f"  scores type: {type(scores)}, shape: {scores.shape if hasattr(scores, 'shape') else 'N/A'}")
+            print(f"  labels type: {type(labels)}, shape: {labels.shape if hasattr(labels, 'shape') else 'N/A'}")
+            print(f"  labels dtype: {labels.dtype if hasattr(labels, 'dtype') else 'N/A'}")
+            print(f"  labels unique values: {torch.unique(labels).tolist() if torch.is_tensor(labels) else 'N/A'}")
+            print(f"  labels first 10: {labels[:10].tolist() if torch.is_tensor(labels) and len(labels) > 0 else 'N/A'}")
+            _debug_gather_printed = True
+
         preds.append((boxes.tensor.detach().cpu(), scores.detach().cpu(), labels.detach().cpu()))
 
     gts = []
@@ -301,6 +321,9 @@ def export_and_eval(_cfg_path: str, checkpoint: str, dataroot: str, iou_thr: flo
     pred_counts_per_class = {0: 0, 1: 0, 2: 0}  # Vehicle, Cyclist, Pedestrian
     gt_counts_per_class = {0: 0, 1: 0, 2: 0}  # Vehicle, Cyclist, Pedestrian
 
+    # 调试标志
+    _debug_stats_printed = False
+
     for batch in tqdm(valloader, desc="Exporting predictions"):
         batch = to_device(batch, device)
         with torch.no_grad():
@@ -311,14 +334,30 @@ def export_and_eval(_cfg_path: str, checkpoint: str, dataroot: str, iou_thr: flo
             frame_id = batch.get('frame_id', [idx])[idx] if 'frame_id' in batch else idx
             sample_id = f"{seq_name}_{frame_id}"
             boxes, scores, labels = pred
-            
+
+            # 调试：打印统计循环中的 labels 信息（仅首次）
+            if not _debug_stats_printed:
+                print(f"\n[DEBUG export_and_eval stats loop] ===")
+                print(f"  pred structure: {type(pred)}, len={len(pred)}")
+                print(f"  boxes shape: {boxes.shape}")
+                print(f"  scores shape: {scores.shape}")
+                print(f"  labels type: {type(labels)}, shape: {labels.shape if hasattr(labels, 'shape') else 'N/A'}")
+                print(f"  labels dtype: {labels.dtype if hasattr(labels, 'dtype') else 'N/A'}")
+                labels_list = labels.tolist()
+                print(f"  labels.tolist() type: {type(labels_list)}")
+                print(f"  labels.tolist() len: {len(labels_list)}")
+                if len(labels_list) > 0:
+                    print(f"  labels.tolist()[0] type: {type(labels_list[0])}")
+                    print(f"  labels.tolist()[:10]: {labels_list[:10]}")
+                _debug_stats_printed = True
+
             # 应用score threshold过滤低质量预测
             if score_thr > 0:
                 mask = scores >= score_thr
                 boxes = boxes[mask]
                 scores = scores[mask]
                 labels = labels[mask]
-            
+
             # 统计信息
             total_preds += len(boxes)
             total_gts += len(gt[0])
@@ -330,7 +369,7 @@ def export_and_eval(_cfg_path: str, checkpoint: str, dataroot: str, iou_thr: flo
             for label in gt[1].tolist():
                 if label in gt_counts_per_class:
                     gt_counts_per_class[label] += 1
-            
+
             preds_all.append((sample_id, boxes[:, :7], scores, labels))
             gts_all[sample_id] = (gt[0][:, :7], gt[1])
     
