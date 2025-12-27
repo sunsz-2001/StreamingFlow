@@ -18,132 +18,129 @@ def to_device(batch: Dict, device: torch.device) -> Dict:
     return batch
 
 
+def process_flow_data(batch, cfg):
+    """
+    按照 trainer_dsec.py 的方式处理 flow_data，聚合 batch 中的数据
+
+    Args:
+        batch: 包含 'flow_data' 键的 batch 字典
+        cfg: 配置对象
+
+    Returns:
+        flow_data: 聚合后的 flow_data 列表，每个元素对应一个 flow_frame
+    """
+    flow_data = []
+    flow_batch = batch['flow_data']
+
+    # 遍历每个 flow_frame（时间窗口）
+    for flow_frame in range(len(flow_batch[0])):
+        temp_flow_data = {
+            'intrinsics': [],
+            'extrinsics': [],
+            'flow_lidar': [],
+            'flow_events': [],
+            'events_stmp': [],
+            'lidar_stmp': [],
+            'target_timestamp': [],
+        }
+
+        # 遍历 batch 中的每个样本
+        for bs_idx in range(len(flow_batch)):
+            tmp = flow_batch[bs_idx][flow_frame]
+
+            for key in temp_flow_data.keys():
+                if key == 'flow_events':
+                    tmp_evs = torch.stack(tmp[key], dim=0)
+                    temp_flow_data[key].append(tmp_evs)
+                else:
+                    temp_flow_data[key].append(tmp[key])
+
+        # 聚合数据
+        for key in temp_flow_data.keys():
+            if type(temp_flow_data[key][0]) in (np.ndarray, list):
+                try:
+                    temp_flow_data[key] = np.array(temp_flow_data[key])
+                except:
+                    pass
+            elif type(temp_flow_data[key][0]) == torch.Tensor:
+                temp_flow_data[key] = torch.stack(temp_flow_data[key], dim=0)
+
+        flow_data.append(temp_flow_data)
+
+    return flow_data
+
+
 def gather_batch_outputs(model, batch, device, cfg=None, decode: bool = True) -> Tuple[List, List]:
     """Run forward pass and optionally decode predictions."""
     event = batch.get("event")
-    
-    # 处理 points 和 lidar_timestamp：如果使用 flow_data 格式，需要从 flow_data 中提取
-    points = batch.get("points")
-    lidar_timestamp = batch.get("lidar_timestamp")
-    
+
+    # 初始化点云和时间戳
+    points = None
+    lidar_timestamp = None
+    intrinsics = None
+    extrinsics = None
+    camera_timestamps = None
+    target_timestamp = None
+
     if cfg is not None:
         use_flow_data = getattr(cfg.DATASET, 'USE_FLOW_DATA', False)
         use_lidar = getattr(cfg.MODEL.MODALITY, 'USE_LIDAR', False)
-        
-        if use_flow_data and use_lidar and 'flow_data' in batch:
-            # 从 flow_data 中提取点云数据（类似 trainer.py 中的逻辑）
-            flow_data_list = batch['flow_data']
-            points = []
-            lidar_timestamps_list = []
-            
-            for sample_idx, sample_flow_data in enumerate(flow_data_list):
-                if isinstance(sample_flow_data, list) and len(sample_flow_data) > 0:
-                    first_window = sample_flow_data[0]
-                    if isinstance(first_window, dict) and 'flow_lidar' in first_window:
-                        flow_lidar = first_window['flow_lidar']
-                        if isinstance(flow_lidar, list) and len(flow_lidar) > 0:
-                            first_lidar = flow_lidar[0]
-                            receptive_field = getattr(cfg, 'TIME_RECEPTIVE_FIELD', 1)
-                            
-                            if isinstance(first_lidar, (list, tuple)):
-                                # 多时间步点云格式
-                                sample_points = []
-                                for t in range(min(len(first_lidar), receptive_field)):
-                                    pc_t = first_lidar[t]
-                                    if isinstance(pc_t, np.ndarray):
-                                        pc_t = torch.from_numpy(pc_t)
-                                    elif not torch.is_tensor(pc_t):
-                                        raise TypeError(
-                                            f"Expected point cloud to be Tensor or np.ndarray, but got {type(pc_t)}"
-                                        )
-                                    else:
-                                        pc_t = pc_t.to(dtype=torch.float32)
-                                    sample_points.append(pc_t)
-                                # 如果时间步不足，用最后一个点云填充
-                                while len(sample_points) < receptive_field:
-                                    sample_points.append(sample_points[-1].clone() if torch.is_tensor(sample_points[-1]) else sample_points[-1])
-                                points.append(sample_points)
-                            else:
-                                # 单个点云格式（TIME_RECEPTIVE_FIELD=1）
-                                point_cloud = first_lidar
-                                if isinstance(point_cloud, np.ndarray):
-                                    point_cloud = torch.from_numpy(point_cloud)
-                                elif not torch.is_tensor(point_cloud):
-                                    raise TypeError(
-                                        f"Expected point cloud to be Tensor or np.ndarray, but got {type(point_cloud)}"
-                                    )
-                                else:
-                                    point_cloud = point_cloud.to(dtype=torch.float32)
-                                points.append(point_cloud)
-                            
-                            # 提取时间戳
-                            if 'lidar_stmp' in first_window:
-                                lidar_stmp = first_window['lidar_stmp']
-                                if isinstance(lidar_stmp, (list, tuple)) and len(lidar_stmp) > 0:
-                                    lidar_timestamps_list.append(lidar_stmp[0])
-                                else:
-                                    lidar_timestamps_list.append(lidar_stmp if not isinstance(lidar_stmp, (list, tuple)) else lidar_stmp[0])
-                            else:
-                                lidar_timestamps_list.append(0.0)
-                        else:
-                            # 空点云处理
-                            receptive_field = getattr(cfg, 'TIME_RECEPTIVE_FIELD', 1)
-                            if receptive_field > 1:
-                                points.append([torch.zeros(0, 4, dtype=torch.float32)] * receptive_field)
-                            else:
-                                points.append(torch.zeros(0, 4, dtype=torch.float32))
-                            lidar_timestamps_list.append(0.0)
-                    else:
-                        # 无效的窗口格式
-                        receptive_field = getattr(cfg, 'TIME_RECEPTIVE_FIELD', 1)
-                        if receptive_field > 1:
-                            points.append([torch.zeros(0, 4, dtype=torch.float32)] * receptive_field)
-                        else:
-                            points.append(torch.zeros(0, 4, dtype=torch.float32))
-                        lidar_timestamps_list.append(0.0)
-                else:
-                    # 空的 sample_flow_data
-                    receptive_field = getattr(cfg, 'TIME_RECEPTIVE_FIELD', 1)
-                    if receptive_field > 1:
-                        points.append([torch.zeros(0, 4, dtype=torch.float32)] * receptive_field)
-                    else:
-                        points.append(torch.zeros(0, 4, dtype=torch.float32))
-                    lidar_timestamps_list.append(0.0)
-            
-            # 将时间戳列表转换为张量 [B, T]
-            if len(lidar_timestamps_list) > 0:
-                receptive_field = getattr(cfg, 'TIME_RECEPTIVE_FIELD', 1)
-                if receptive_field == 1:
-                    lidar_timestamp = torch.tensor(lidar_timestamps_list, device=device, dtype=torch.float32).unsqueeze(1)  # [B, 1]
-                else:
-                    # 对于多时间步，需要从 flow_data 中提取所有时间步的时间戳
-                    lidar_timestamp_list_2d = []
-                    for sample_idx, sample_flow_data in enumerate(flow_data_list):
-                        if isinstance(sample_flow_data, list) and len(sample_flow_data) > 0:
-                            first_window = sample_flow_data[0]
-                            if 'lidar_stmp' in first_window:
-                                lidar_stmp = first_window['lidar_stmp']
-                                if isinstance(lidar_stmp, (list, tuple)):
-                                    lidar_timestamp_list_2d.append(lidar_stmp[:receptive_field])
-                                else:
-                                    lidar_timestamp_list_2d.append([lidar_stmp] * receptive_field)
-                            else:
-                                lidar_timestamp_list_2d.append([0.0] * receptive_field)
-                        else:
-                            lidar_timestamp_list_2d.append([0.0] * receptive_field)
-                    lidar_timestamp = torch.tensor(lidar_timestamp_list_2d, device=device, dtype=torch.float32)  # [B, T]
-    
+
+        if use_flow_data and 'flow_data' in batch:
+            # 按照 trainer_dsec.py 的方式处理 flow_data
+            flow_data = process_flow_data(batch, cfg)
+
+            # 从聚合后的 flow_data 中提取数据（使用第一个 flow_frame）
+            intrinsics = flow_data[0]['intrinsics']
+            extrinsics = flow_data[0]['extrinsics']
+            camera_timestamps = flow_data[0]['events_stmp']
+            target_timestamp = flow_data[0]['target_timestamp']
+
+            if use_lidar:
+                points = flow_data[0]['flow_lidar']
+                lidar_timestamp = flow_data[0]['lidar_stmp']
+        else:
+            # 非 flow_data 模式，直接从 batch 获取
+            points = batch.get("points")
+            lidar_timestamp = batch.get("lidar_timestamp")
+            intrinsics = batch.get("intrinsics")
+            extrinsics = batch.get("extrinsics")
+            camera_timestamps = batch.get("camera_timestamp")
+            target_timestamp = batch.get("target_timestamp")
+    else:
+        # 无配置时使用默认 batch 字段
+        points = batch.get("points")
+        lidar_timestamp = batch.get("lidar_timestamp")
+        intrinsics = batch.get("intrinsics")
+        extrinsics = batch.get("extrinsics")
+        camera_timestamps = batch.get("camera_timestamp")
+        target_timestamp = batch.get("target_timestamp")
+
+    # 如果从 flow_data 中没有获取到 intrinsics/extrinsics，则从 batch 中获取
+    if intrinsics is None:
+        intrinsics = batch.get("intrinsics")
+    if extrinsics is None:
+        extrinsics = batch.get("extrinsics")
+    if camera_timestamps is None:
+        camera_timestamps = batch.get("camera_timestamp")
+    if target_timestamp is None:
+        target_timestamp = batch.get("target_timestamp")
+
+    # 获取 metas（检测任务需要）
+    metas = batch.get("metas")
+
     output = model(
         batch.get("image"),
-        batch.get("intrinsics"),
-        batch.get("extrinsics"),
+        intrinsics,
+        extrinsics,
         batch.get("future_egomotion"),
         batch.get("padded_voxel_points"),
-        batch.get("camera_timestamp"),
+        camera_timestamps,
         points,
         lidar_timestamp,
-        batch.get("target_timestamp"),
+        target_timestamp,
         event=event,
+        metas=metas,
     )
 
     if not decode:
