@@ -380,14 +380,14 @@ class streamingflow(nn.Module):
             
             # 打印 Voxelization 返回的坐标格式
             if k == 0 and c.numel() > 0:
-                print(f"\n[DEBUG] Voxelization output (batch {k}):")
-                print(f"  Features shape: {f.shape}")
-                print(f"  Coords shape: {c.shape}")
-                print(f"  Coords dtype: {c.dtype}")
-                print(f"  Coords device: {c.device}")
-                print(f"  First 5 coords (before batch_idx padding):")
-                print(f"    {c[:min(5, len(c))]}")
-                print(f"  Coords range:")
+                # print(f"\n[DEBUG] Voxelization output (batch {k}):")
+                # print(f"  Features shape: {f.shape}")
+                # print(f"  Coords shape: {c.shape}")
+                # print(f"  Coords dtype: {c.dtype}")
+                # print(f"  Coords device: {c.device}")
+                # print(f"  First 5 coords (before batch_idx padding):")
+                # print(f"    {c[:min(5, len(c))]}")
+                # print(f"  Coords range:")
                 if c.shape[1] >= 3:
                     print(f"    Dim 0: [{c[:, 0].min().item()}, {c[:, 0].max().item()}]")
                     print(f"    Dim 1: [{c[:, 1].min().item()}, {c[:, 1].max().item()}]")
@@ -401,16 +401,16 @@ class streamingflow(nn.Module):
             coords.append(padded_c)
             
             # 打印添加 batch_idx 后的坐标
-            if k == 0 and padded_c.numel() > 0:
-                print(f"\n[DEBUG] Coords after batch_idx padding (batch {k}):")
-                print(f"  Shape: {padded_c.shape}")
-                print(f"  First 5 coords: {padded_c[:min(5, len(padded_c))]}")
-                print(f"  Coords range:")
-                print(f"    Batch idx (dim 0): [{padded_c[:, 0].min().item()}, {padded_c[:, 0].max().item()}]")
-                if padded_c.shape[1] >= 4:
-                    print(f"    Dim 1: [{padded_c[:, 1].min().item()}, {padded_c[:, 1].max().item()}]")
-                    print(f"    Dim 2: [{padded_c[:, 2].min().item()}, {padded_c[:, 2].max().item()}]")
-                    print(f"    Dim 3: [{padded_c[:, 3].min().item()}, {padded_c[:, 3].max().item()}]")
+            # if k == 0 and padded_c.numel() > 0:
+            #     print(f"\n[DEBUG] Coords after batch_idx padding (batch {k}):")
+            #     print(f"  Shape: {padded_c.shape}")
+            #     print(f"  First 5 coords: {padded_c[:min(5, len(padded_c))]}")
+            #     print(f"  Coords range:")
+            #     print(f"    Batch idx (dim 0): [{padded_c[:, 0].min().item()}, {padded_c[:, 0].max().item()}]")
+            #     if padded_c.shape[1] >= 4:
+            #         print(f"    Dim 1: [{padded_c[:, 1].min().item()}, {padded_c[:, 1].max().item()}]")
+            #         print(f"    Dim 2: [{padded_c[:, 2].min().item()}, {padded_c[:, 2].max().item()}]")
+            #         print(f"    Dim 3: [{padded_c[:, 3].min().item()}, {padded_c[:, 3].max().item()}]")
             
             if n is not None:
                 sizes.append(n)
@@ -425,29 +425,29 @@ class streamingflow(nn.Module):
         coords = torch.cat(coords, dim=0)
         
         # 打印合并后的坐标信息
-        print(f"\n[DEBUG] Final concatenated coords:")
-        print(f"  Total voxels: {len(coords)}")
-        print(f"  Coords shape: {coords.shape}")
-        print(f"  Coords range:")
-        print(f"    Batch idx (dim 0): [{coords[:, 0].min().item()}, {coords[:, 0].max().item()}]")
-        if coords.shape[1] >= 4:
-            print(f"    Dim 1: [{coords[:, 1].min().item()}, {coords[:, 1].max().item()}]")
-            print(f"    Dim 2: [{coords[:, 2].min().item()}, {coords[:, 2].max().item()}]")
-            print(f"    Dim 3: [{coords[:, 3].min().item()}, {coords[:, 3].max().item()}]")
+        # print(f"\n[DEBUG] Final concatenated coords:")
+        # print(f"  Total voxels: {len(coords)}")
+        # print(f"  Coords shape: {coords.shape}")
+        # print(f"  Coords range:")
+        # print(f"    Batch idx (dim 0): [{coords[:, 0].min().item()}, {coords[:, 0].max().item()}]")
+        # if coords.shape[1] >= 4:
+        #     print(f"    Dim 1: [{coords[:, 1].min().item()}, {coords[:, 1].max().item()}]")
+        #     print(f"    Dim 2: [{coords[:, 2].min().item()}, {coords[:, 2].max().item()}]")
+        #     print(f"    Dim 3: [{coords[:, 3].min().item()}, {coords[:, 3].max().item()}]")
         
         # 获取 sparse_shape 用于验证
         sparse_shape = self.encoders["lidar"]["backbone"].sparse_shape
-        print(f"\n[DEBUG] SparseEncoder sparse_shape: {sparse_shape} [Z, Y, X]")
-        print(f"[DEBUG] Checking if coords are within sparse_shape bounds:")
+        # print(f"\n[DEBUG] SparseEncoder sparse_shape: {sparse_shape} [Z, Y, X]")
+        # print(f"[DEBUG] Checking if coords are within sparse_shape bounds:")
         if coords.shape[1] >= 4:
             # coords 格式: [batch_idx, coord1, coord2, coord3]
             # 需要确认 coord1, coord2, coord3 对应的是 [x, y, z] 还是 [z, y, x]
             coord1_max = coords[:, 1].max().item()
             coord2_max = coords[:, 2].max().item()
             coord3_max = coords[:, 3].max().item()
-            print(f"  Coord dim 1 max: {coord1_max}, sparse_shape[2] (X): {sparse_shape[2]}")
-            print(f"  Coord dim 2 max: {coord2_max}, sparse_shape[1] (Y): {sparse_shape[1]}")
-            print(f"  Coord dim 3 max: {coord3_max}, sparse_shape[0] (Z): {sparse_shape[0]}")
+            # print(f"  Coord dim 1 max: {coord1_max}, sparse_shape[2] (X): {sparse_shape[2]}")
+            # print(f"  Coord dim 2 max: {coord2_max}, sparse_shape[1] (Y): {sparse_shape[1]}")
+            # print(f"  Coord dim 3 max: {coord3_max}, sparse_shape[0] (Z): {sparse_shape[0]}")
             
             # 检查是否越界（假设格式是 [batch_idx, x, y, z]）
             if coord1_max >= sparse_shape[2]:
@@ -488,29 +488,29 @@ class streamingflow(nn.Module):
         batch_size = int(coords[-1, 0].item()) + 1
         
         # 坐标顺序转换为 [batch_idx, Z, Y, X] 以匹配 SparseEncoder 约定
-        print(f"\n[DEBUG] Before coordinate reordering:")
-        print(f"  Original coords shape: {coords.shape}")
-        print(f"  Original coords format: [batch_idx, X, Y, Z]")
-        if coords.numel() > 0:
-            print(f"  First 5 original coords: {coords[:min(5, len(coords))].cpu().numpy()}")
+        # print(f"\n[DEBUG] Before coordinate reordering:")
+        # print(f"  Original coords shape: {coords.shape}")
+        # print(f"  Original coords format: [batch_idx, X, Y, Z]")
+        # if coords.numel() > 0:
+        #     print(f"  First 5 original coords: {coords[:min(5, len(coords))].cpu().numpy()}")
 
         coords = coords[:, [0, 3, 2, 1]].contiguous()
 
-        print(f"\n[DEBUG] After coordinate reordering:")
-        print(f"  Reordered coords shape: {coords.shape}")
-        print(f"  Reordered coords format: [batch_idx, Z, Y, X]")
-        if coords.numel() > 0:
-            print(f"  First 5 reordered coords: {coords[:min(5, len(coords))].cpu().numpy()}")
+        # print(f"\n[DEBUG] After coordinate reordering:")
+        # print(f"  Reordered coords shape: {coords.shape}")
+        # print(f"  Reordered coords format: [batch_idx, Z, Y, X]")
+        # if coords.numel() > 0:
+        #     print(f"  First 5 reordered coords: {coords[:min(5, len(coords))].cpu().numpy()}")
 
         if coords.shape[1] >= 4:
             z_coords = coords[:, 1]
             y_coords = coords[:, 2]
             x_coords = coords[:, 3]
             sparse_shape = self.encoders['lidar']['backbone'].sparse_shape
-            print(f"\n[DEBUG] Coordinate validation after reordering:")
-            print(f"  Z coords range: [{z_coords.min().item()}, {z_coords.max().item()}], sparse_shape[0] (Z): {sparse_shape[0]}")
-            print(f"  Y coords range: [{y_coords.min().item()}, {y_coords.max().item()}], sparse_shape[1] (Y): {sparse_shape[1]}")
-            print(f"  X coords range: [{x_coords.min().item()}, {x_coords.max().item()}], sparse_shape[2] (X): {sparse_shape[2]}")
+            # print(f"\n[DEBUG] Coordinate validation after reordering:")
+            # print(f"  Z coords range: [{z_coords.min().item()}, {z_coords.max().item()}], sparse_shape[0] (Z): {sparse_shape[0]}")
+            # print(f"  Y coords range: [{y_coords.min().item()}, {y_coords.max().item()}], sparse_shape[1] (Y): {sparse_shape[1]}")
+            # print(f"  X coords range: [{x_coords.min().item()}, {x_coords.max().item()}], sparse_shape[2] (X): {sparse_shape[2]}")
             if z_coords.max().item() >= sparse_shape[0]:
                 print(f"[ERROR] Z coordinate overflow: {z_coords.max().item()} >= {sparse_shape[0]}")
             if y_coords.max().item() >= sparse_shape[1]:
@@ -518,30 +518,30 @@ class streamingflow(nn.Module):
             if x_coords.max().item() >= sparse_shape[2]:
                 print(f"[ERROR] X coordinate overflow: {x_coords.max().item()} >= {sparse_shape[2]}")
         
-        print(f"\n[DEBUG] Before SparseEncoder forward:")
-        print(f"  Features shape: {feats.shape}")
-        print(f"  Coords shape: {coords.shape}")
-        print(f"  Batch size: {batch_size}")
-        print(f"  SparseEncoder sparse_shape: {self.encoders['lidar']['backbone'].sparse_shape}")
+        # print(f"\n[DEBUG] Before SparseEncoder forward:")
+        # print(f"  Features shape: {feats.shape}")
+        # print(f"  Coords shape: {coords.shape}")
+        # print(f"  Batch size: {batch_size}")
+        # print(f"  SparseEncoder sparse_shape: {self.encoders['lidar']['backbone'].sparse_shape}")
         
         try:
             x = self.encoders["lidar"]["backbone"](feats, coords, batch_size, sizes=sizes)
-            print(f"[DEBUG] SparseEncoder forward succeeded!")
-            print(f"  Output shape: {x.shape}")
+            # print(f"[DEBUG] SparseEncoder forward succeeded!")
+            # print(f"  Output shape: {x.shape}")
             return x
         except RuntimeError as e:
-            print(f"\n[ERROR] SparseEncoder forward failed!")
-            print(f"  Error: {e}")
-            print(f"  Coords shape: {coords.shape}")
-            print(f"  Coords dtype: {coords.dtype}")
-            print(f"  Coords device: {coords.device}")
+            # print(f"\n[ERROR] SparseEncoder forward failed!")
+            # print(f"  Error: {e}")
+            # print(f"  Coords shape: {coords.shape}")
+            # print(f"  Coords dtype: {coords.dtype}")
+            # print(f"  Coords device: {coords.device}")
             if coords.numel() > 0:
                 print(f"  Coords sample (first 10):")
                 try:
                     print(f"    {coords[:min(10, len(coords))].cpu().numpy()}")
                 except:
                     print(f"    (Unable to print coords due to CUDA error)")
-            print(f"  SparseEncoder sparse_shape: {self.encoders['lidar']['backbone'].sparse_shape}")
+            # print(f"  SparseEncoder sparse_shape: {self.encoders['lidar']['backbone'].sparse_shape}")
             raise
 
     def extract_lidar_features_time_series(self, points, T=None):

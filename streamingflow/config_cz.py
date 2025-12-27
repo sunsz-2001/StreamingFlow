@@ -47,7 +47,7 @@ _C.PRETRAINED.LOAD_WEIGHTS = False
 _C.PRETRAINED.PATH = ''
 
 _C.DATASET = CN()
-_C.DATASET.DATAROOT = 'data/nuscenes'
+_C.DATASET.DATAROOT = '/media/switcher/sda/datasets/dsec/'
 _C.DATASET.VERSION = 'trainval'
 _C.DATASET.NAME = 'nuscenes'
 _C.DATASET.MAP_FOLDER = 'data/nuscenes'

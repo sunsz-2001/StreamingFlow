@@ -195,7 +195,8 @@ def gather_batch_outputs(model, batch, device, cfg=None, decode: bool = True) ->
             _debug_gather_printed = True
 
         preds.append((boxes.tensor.detach().cpu(), scores.detach().cpu(), labels.detach().cpu()))
-
+    
+    print(f"[DEBUG] detection_head.num_classes: {model.decoder.detection_head.num_classes}", flush=True)
     gts = []
     for gt_boxes, gt_labels in zip(batch["gt_bboxes_3d"], batch["gt_labels_3d"]):
         gts.append((gt_boxes.tensor.cpu(), gt_labels.cpu()))
@@ -312,23 +313,36 @@ def export_and_eval(_cfg_path: str, checkpoint: str, dataroot: str, iou_thr: flo
 
     preds_all = []
     gts_all = {}
-    class_names = ["Vehicle", "Cyclist", "Pedestrian"]
+    class_names = ["Vehicle", "Cyclist", "Pedestrian", "Background"]
     
     # 统计信息
     total_preds = 0
     total_gts = 0
     pred_scores_sum = []
-    pred_counts_per_class = {0: 0, 1: 0, 2: 0}  # Vehicle, Cyclist, Pedestrian
-    gt_counts_per_class = {0: 0, 1: 0, 2: 0}  # Vehicle, Cyclist, Pedestrian
+    pred_counts_per_class = {0: 0, 1: 0, 2: 0, 3: 0}  # Vehicle, Cyclist, Pedestrian, Background
+    gt_counts_per_class = {0: 0, 1: 0, 2: 0, 3: 0}  # Vehicle, Cyclist, Pedestrian, Background
 
     # 调试标志
     _debug_stats_printed = False
 
-    for batch in tqdm(valloader, desc="Exporting predictions"):
+    for batch_idx, batch in enumerate(tqdm(valloader, desc="Exporting predictions")):
         batch = to_device(batch, device)
         with torch.no_grad():
             preds, gts = gather_batch_outputs(trainer.model, batch, device, cfg=cfg)
+        if batch_idx == 0:  # 需要把 for batch in 改成 for batch_idx, batch in enumerate(...)
+            print(f"\n[DEBUG] preds len: {len(preds)}, gts len: {len(gts)}", flush=True)
+            if len(preds) > 0:
+                print(f"[DEBUG] preds[0] type: {type(preds[0])}, len: {len(preds[0])}", flush=True)
+            if len(gts) > 0:
+                print(f"[DEBUG] gts[0] type: {type(gts[0])}, len: {len(gts[0])}", flush=True)
         for idx, (pred, gt) in enumerate(zip(preds, gts)):
+            if batch_idx == 0:
+                boxes, scores, labels = pred
+                print(f"[DEBUG inner loop] idx={idx}", flush=True)
+                print(f"[DEBUG inner loop] labels shape: {labels.shape}", flush=True)
+                print(f"[DEBUG inner loop] labels dtype: {labels.dtype}", flush=True)
+                print(f"[DEBUG inner loop] labels.tolist()[:10]: {labels.tolist()[:10]}", flush=True)
+                print(f"[DEBUG inner loop] type(labels.tolist()[0]): {type(labels.tolist()[0])}", flush=True)
             # 生成样本ID：使用 sequence_name 和 frame_id（如果存在）
             seq_name = batch.get('sequence_name', ['unknown'])[idx] if 'sequence_name' in batch else f'seq_{idx}'
             frame_id = batch.get('frame_id', [idx])[idx] if 'frame_id' in batch else idx
@@ -357,6 +371,11 @@ def export_and_eval(_cfg_path: str, checkpoint: str, dataroot: str, iou_thr: flo
                 boxes = boxes[mask]
                 scores = scores[mask]
                 labels = labels[mask]
+                
+            if batch_idx == 0:
+                print(f"[DEBUG after filter] labels shape: {labels.shape}", flush=True)
+                print(f"[DEBUG after filter] labels unique: {torch.unique(labels).tolist()}", flush=True)
+                print(f"[DEBUG after filter] labels.tolist()[:10]: {labels.tolist()[:10] if len(labels) > 0 else 'empty'}", flush=True)
 
             # 统计信息
             total_preds += len(boxes)
@@ -366,6 +385,9 @@ def export_and_eval(_cfg_path: str, checkpoint: str, dataroot: str, iou_thr: flo
             for label in labels.tolist():
                 if label in pred_counts_per_class:
                     pred_counts_per_class[label] += 1
+             # 在循环结束后添加（只在第一个 batch 时打印）
+            if batch_idx == 0:
+                print(f"[DEBUG stats] After first batch, pred_counts_per_class: {pred_counts_per_class}", flush=True)
             for label in gt[1].tolist():
                 if label in gt_counts_per_class:
                     gt_counts_per_class[label] += 1

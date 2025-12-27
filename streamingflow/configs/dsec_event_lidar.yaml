@@ -139,7 +139,7 @@ PLANNING:
 
 DETECTION:
   ENABLED: True
-  NUM_CLASSES: 3  # Vehicle, Cyclist, Pedestrian三个类别
+  NUM_CLASSES: 4  # Vehicle, Cyclist, Pedestrian, Background四个类别
   NUM_PROPOSALS: 128
   HIDDEN_CHANNEL: 128
   NUM_DECODER_LAYERS: 3

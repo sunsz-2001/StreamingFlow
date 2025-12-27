@@ -191,12 +191,12 @@ class NNFOwithBayesianJumps(nn.Module):
             在目标时间戳下解析出来的 BEV 特征。
         """
         # [DEBUG] Print time information to debug potential deadlocks
-        print(f"\n[ODE DEBUG] Forward Pass:")
-        print(f"  Start Time (times.min): {times.min().item()}")
-        print(f"  End Time (times.max): {times.max().item()}")
-        print(f"  Target Times (T): {T.detach().cpu().numpy() if T.numel() < 10 else T[:5].detach().cpu().numpy()}")
-        print(f"  Delta T: {delta_t}")
-        print(f"  Use Variable Step: {self.use_variable_ode_step}")
+        # print(f"\n[ODE DEBUG] Forward Pass:")
+        # print(f"  Start Time (times.min): {times.min().item()}")
+        # print(f"  End Time (times.max): {times.max().item()}")
+        # print(f"  Target Times (T): {T.detach().cpu().numpy() if T.numel() < 10 else T[:5].detach().cpu().numpy()}")
+        # print(f"  Delta T: {delta_t}")
+        # print(f"  Use Variable Step: {self.use_variable_ode_step}")
         if self.use_variable_ode_step:
             print("  (Variable step enabled: will jump directly to next observation)")
         

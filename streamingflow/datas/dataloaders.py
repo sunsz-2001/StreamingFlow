@@ -110,7 +110,7 @@ def dsec_collate_fn(batch):
         
         # 输出数据尺寸信息
         if collated:
-            print("[DataLoader] Batch sizes:")
+            # print("[DataLoader] Batch sizes:")
             # 输出 event frames 尺寸
             if 'event' in collated and isinstance(collated['event'], dict):
                 if 'frames' in collated['event']:
