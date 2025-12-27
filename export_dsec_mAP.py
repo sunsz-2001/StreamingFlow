@@ -126,6 +126,27 @@ def gather_batch_outputs(model, batch, device, cfg=None, decode: bool = True) ->
     if target_timestamp is None:
         target_timestamp = batch.get("target_timestamp")
 
+    # 将数据转换为正确设备上的 tensor
+    def to_device_tensor(data, device):
+        """将 numpy array 或 tensor 转换为指定设备上的 tensor"""
+        if data is None:
+            return None
+        if isinstance(data, np.ndarray):
+            return torch.from_numpy(data).float().to(device)
+        elif isinstance(data, torch.Tensor):
+            return data.float().to(device)
+        elif isinstance(data, (list, tuple)):
+            # 处理列表（如 flow_lidar）
+            return data  # 保持原样，模型内部会处理
+        else:
+            return data
+
+    intrinsics = to_device_tensor(intrinsics, device)
+    extrinsics = to_device_tensor(extrinsics, device)
+    camera_timestamps = to_device_tensor(camera_timestamps, device)
+    target_timestamp = to_device_tensor(target_timestamp, device)
+    lidar_timestamp = to_device_tensor(lidar_timestamp, device)
+
     # 获取 metas（检测任务需要）
     metas = batch.get("metas")
 
