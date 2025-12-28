@@ -78,7 +78,7 @@ class TransFusionHead(nn.Module):
         norm_cfg=dict(type="BN1d"),
         bias="auto",
         # loss
-        loss_cls=dict(type="GaussianFocalLoss", reduction="mean"),
+        loss_cls=dict(type="GaussianFocalLoss", reduction="mean", use_sigmoid=True),
         loss_iou=dict(
             type="VarifocalLoss", use_sigmoid=True, iou_weighted=True, reduction="mean"
         ),

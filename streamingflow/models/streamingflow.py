@@ -360,14 +360,14 @@ class streamingflow(nn.Module):
                 continue
 
             # 打印输入点云信息
-            if k == 0:  # 只打印第一个样本的详细信息
-                print(f"\n[DEBUG] Voxelize input (batch {k}):")
-                print(f"  Point cloud shape: {res.shape}")
-                if res.numel() > 0:
-                    print(f"  Point cloud range:")
-                    print(f"    X: [{res[:, 0].min().item():.2f}, {res[:, 0].max().item():.2f}]")
-                    print(f"    Y: [{res[:, 1].min().item():.2f}, {res[:, 1].max().item():.2f}]")
-                    print(f"    Z: [{res[:, 2].min().item():.2f}, {res[:, 2].max().item():.2f}]")
+            # if k == 0:  # 只打印第一个样本的详细信息
+            #     print(f"\n[DEBUG] Voxelize input (batch {k}):")
+            #     print(f"  Point cloud shape: {res.shape}")
+            #     if res.numel() > 0:
+            #         print(f"  Point cloud range:")
+            #         print(f"    X: [{res[:, 0].min().item():.2f}, {res[:, 0].max().item():.2f}]")
+            #         print(f"    Y: [{res[:, 1].min().item():.2f}, {res[:, 1].max().item():.2f}]")
+            #         print(f"    Z: [{res[:, 2].min().item():.2f}, {res[:, 2].max().item():.2f}]")
 
             ret = self.encoders["lidar"]["voxelize"](res)
             if len(ret) == 3:

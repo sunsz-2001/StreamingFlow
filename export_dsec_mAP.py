@@ -168,6 +168,33 @@ def gather_batch_outputs(model, batch, device, cfg=None, decode: bool = True) ->
         return [], []
 
     preds_raw = output["detection"]
+    
+    global _debug_heatmap_printed
+    if '_debug_heatmap_printed' not in dir():
+        _debug_heatmap_printed = False
+
+    if not _debug_heatmap_printed:
+        print("\n[DEBUG HEATMAP] ===")
+        if len(preds_raw) > 0 and len(preds_raw[0]) > 0:
+            pred_dict = preds_raw[0][0]
+            if 'heatmap' in pred_dict:
+                heatmap = pred_dict['heatmap']
+                print(f"  heatmap shape: {heatmap.shape}")
+                num_classes = heatmap.shape[1]
+                heatmap_sig = heatmap.sigmoid()
+                print(f"  heatmap 各通道统计 (sigmoid后):")
+                for c in range(num_classes):
+                    ch = heatmap_sig[:, c]
+                    print(f"    通道 {c}: max={ch.max().item():.4f}, mean={ch.mean().item():.4f}")
+                # 查看每个 proposal 的最大响应通道分布
+                if heatmap.dim() == 3:
+                    max_channels = heatmap_sig[0].argmax(dim=0)
+                    print(f"  每个 proposal 的最大响应通道分布:")
+                    for c in range(num_classes):
+                        count = (max_channels == c).sum().item()
+                        print(f"    通道 {c}: {count} 个 proposals")
+        _debug_heatmap_printed = True
+    
     decoded = model.decoder.detection_head.get_bboxes(preds_raw, batch["metas"])
     # decoded: [[boxes, scores, labels]] - 外层是layer，内层是batch
     # 当前batch_size=1，所以 decoded[0] = [boxes, scores, labels]
@@ -319,8 +346,8 @@ def export_and_eval(_cfg_path: str, checkpoint: str, dataroot: str, iou_thr: flo
     total_preds = 0
     total_gts = 0
     pred_scores_sum = []
-    pred_counts_per_class = {0: 0, 1: 0, 2: 0, 3: 0}  # Vehicle, Cyclist, Pedestrian, Background
-    gt_counts_per_class = {0: 0, 1: 0, 2: 0, 3: 0}  # Vehicle, Cyclist, Pedestrian, Background
+    pred_counts_per_class = {0: 0, 1: 0, 2: 0}  # Vehicle, Cyclist, Pedestrian
+    gt_counts_per_class = {0: 0, 1: 0, 2: 0}  # Vehicle, Cyclist, Pedestrian
 
     # 调试标志
     _debug_stats_printed = False

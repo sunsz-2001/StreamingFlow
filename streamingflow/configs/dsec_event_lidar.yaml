@@ -3,7 +3,7 @@ TAG: 'dsec_event_lidar_eval'  # 训练日志和检查点保存目录名（与 ev
 GPUS: [1]
 BATCHSIZE: 2
 PRECISION: 32  # 16 或 32，混合精度训练使用 16
-EPOCHS: 30  # 训练轮数
+EPOCHS: 10  # 训练轮数
 
 N_WORKERS: 4  # 数据加载器工作进程数
 # LOG_DIR: 'logs'  # 日志保存目录（默认：'logs'）
@@ -139,7 +139,7 @@ PLANNING:
 
 DETECTION:
   ENABLED: True
-  NUM_CLASSES: 4  # Vehicle, Cyclist, Pedestrian, Background四个类别
+  NUM_CLASSES: 3  # Vehicle, Cyclist, Pedestrian三个类别
   NUM_PROPOSALS: 128
   HIDDEN_CHANNEL: 128
   NUM_DECODER_LAYERS: 3
