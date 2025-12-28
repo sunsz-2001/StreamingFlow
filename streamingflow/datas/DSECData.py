@@ -10,7 +10,6 @@ import cv2
 import torch
 import torchvision
 import torch.nn.functional as F
-# torch在prepare_data中也需要使用，已在文件顶部导入
 from pyquaternion import Quaternion
 from nuscenes.nuscenes import NuScenes
 from nuscenes.utils.splits import create_splits_scenes
@@ -40,91 +39,68 @@ from mmdet3d.core.bbox import LiDARInstance3DBoxes
 from mmdet3d.core.bbox import get_box_type
 
 def resize_and_crop_image(img, resize_dims, crop):
-    # Bilinear resizing followed by cropping
-    # OpenCV 默认使用双线性插值进行缩放
     img_resized = cv2.resize(img, resize_dims, interpolation=cv2.INTER_LINEAR)
-    
-    # Crop the image (crop is a tuple of (x, y, w, h))
     x, y, w, h = crop
     img_cropped = img_resized[y:y+h, x:x+w]
-    
     return img_cropped
 
 def range_projection(current_vertex, proj_H=64, proj_W=900, fov_up=3.0, fov_down=-25.0, max_range=50, min_range=2):
-  """ Project a pointcloud into a spherical projection, range image.
-    Args:
-      current_vertex: raw point clouds
-    Returns:
-      proj_vertex: each pixel contains the corresponding point (x, y, z, depth)
-  """
-  # laser parameters
-  fov_up = fov_up / 180.0 * np.pi  # field of view up in radians
-  fov_down = fov_down / 180.0 * np.pi  # field of view down in radians
-  fov = abs(fov_down) + abs(fov_up)  # get field of view total in radians
-  
-  # get depth of all points
+  """Project pointcloud into spherical range image."""
+  fov_up = fov_up / 180.0 * np.pi
+  fov_down = fov_down / 180.0 * np.pi
+  fov = abs(fov_down) + abs(fov_up)
 
   depth = np.linalg.norm(current_vertex[:, :3], 2, axis=1)
-  current_vertex = current_vertex[(depth > min_range) & (depth < max_range)]  # get rid of [0, 0, 0] points
+  current_vertex = current_vertex[(depth > min_range) & (depth < max_range)]
   depth = depth[(depth > min_range) & (depth < max_range)]
-  
-  # get scan components
+
   scan_x = current_vertex[:, 0]
   scan_y = current_vertex[:, 1]
   scan_z = current_vertex[:, 2]
   intensity = current_vertex[:, 3]
-  
-  # get angles of all points
+
   yaw = -np.arctan2(scan_y, scan_x)
   pitch = np.arcsin(scan_z / depth)
-  
-  # get projections in image coords
-  proj_x = 0.5 * (yaw / np.pi + 1.0)  # in [0.0, 1.0]
-  proj_y = 1.0 - (pitch + abs(fov_down)) / fov  # in [0.0, 1.0]
-  
-  # scale to image size using angular resolution
-  proj_x *= proj_W  # in [0.0, W]
-  proj_y *= proj_H  # in [0.0, H]
-  
-  # round and clamp for use as index
+
+  proj_x = 0.5 * (yaw / np.pi + 1.0)
+  proj_y = 1.0 - (pitch + abs(fov_down)) / fov
+
+  proj_x *= proj_W
+  proj_y *= proj_H
+
   proj_x = np.floor(proj_x)
   proj_x = np.minimum(proj_W - 1, proj_x)
-  proj_x = np.maximum(0, proj_x).astype(np.int32)  # in [0,W-1]
+  proj_x = np.maximum(0, proj_x).astype(np.int32)
   proj_x_orig = np.copy(proj_x)
-  
+
   proj_y = np.floor(proj_y)
   proj_y = np.minimum(proj_H - 1, proj_y)
-  proj_y = np.maximum(0, proj_y).astype(np.int32)  # in [0,H-1]
+  proj_y = np.maximum(0, proj_y).astype(np.int32)
   proj_y_orig = np.copy(proj_y)
-  
-  # order in decreasing depth
+
   order = np.argsort(depth)[::-1]
   depth = depth[order]
   intensity = intensity[order]
   proj_y = proj_y[order]
   proj_x = proj_x[order]
-  
+
   scan_x = scan_x[order]
   scan_y = scan_y[order]
   scan_z = scan_z[order]
-  
+
   indices = np.arange(depth.shape[0])
   indices = indices[order]
-  
-  proj_range = np.full((proj_H, proj_W), -1,
-                       dtype=np.float32)  # [H,W] range (-1 is no data)
-  proj_vertex = np.full((proj_H, proj_W, 4), -1,
-                        dtype=np.float32)  # [H,W] index (-1 is no data)
-  proj_idx = np.full((proj_H, proj_W), -1,
-                     dtype=np.int32)  # [H,W] index (-1 is no data)
-  proj_intensity = np.full((proj_H, proj_W), -1,
-                           dtype=np.float32)  # [H,W] index (-1 is no data)
-  
+
+  proj_range = np.full((proj_H, proj_W), -1, dtype=np.float32)
+  proj_vertex = np.full((proj_H, proj_W, 4), -1, dtype=np.float32)
+  proj_idx = np.full((proj_H, proj_W), -1, dtype=np.int32)
+  proj_intensity = np.full((proj_H, proj_W), -1, dtype=np.float32)
+
   proj_range[proj_y, proj_x] = depth
   proj_vertex[proj_y, proj_x] = np.array([scan_x, scan_y, scan_z, depth]).T
   proj_idx[proj_y, proj_x] = indices
   proj_intensity[proj_y, proj_x] = intensity
-  
+
   return proj_vertex
 
 def locate_message(utimes, utime):
@@ -142,7 +118,7 @@ class DatasetDSEC(torch.utils.data.Dataset):
         self.use_image = self.cfg.MODEL.MODALITY.USE_CAMERA
         self.use_event = getattr(self.cfg.MODEL.MODALITY, 'USE_EVENT', False)
         self.use_lidar = getattr(self.cfg.MODEL.MODALITY, 'USE_LIDAR', False)
-        self.use_flow_data = self.data_cfg.DATASET.USE_FLOW_DATA  # 是否使用流式数据格式
+        self.use_flow_data = self.data_cfg.DATASET.USE_FLOW_DATA
         self.num_speed = 20
         self.event_speed = 100
 
@@ -155,17 +131,14 @@ class DatasetDSEC(torch.utils.data.Dataset):
         self.voxel_size = cfg.VOXEL.VOXEL_SIZE
         self.area_extents = np.array(cfg.VOXEL.AREA_EXTENTS)
         self.event_scale = .5
-        # Image resizing and cropping
         self.augmentation_parameters = self.get_resizing_and_cropping_parameters()
 
-        # Normalising input images
         self.normalise_image = torchvision.transforms.Compose(
             [torchvision.transforms.ToTensor(),
              torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ]
         )
 
-        # Bird's-eye view parameters
         bev_resolution, bev_start_position, bev_dimension = calculate_birds_eye_view_parameters(
             cfg.LIFT.X_BOUND, cfg.LIFT.Y_BOUND, cfg.LIFT.Z_BOUND
         )
@@ -173,10 +146,7 @@ class DatasetDSEC(torch.utils.data.Dataset):
             bev_resolution.numpy(), bev_start_position.numpy(), bev_dimension.numpy()
         )
 
-        # Spatial extent in bird's-eye view, in meters
         self.spatial_extent = (self.cfg.LIFT.X_BOUND[1], self.cfg.LIFT.Y_BOUND[1])
-        # DSEC数据集中的类别：Vehicle, Cyclist, Pedestrian
-        # 注意：数据集中实际包含3个类别，之前遗漏了Pedestrian
         self.class_names = ['Vehicle', 'Cyclist', 'Pedestrian']
 
 
@@ -196,7 +166,6 @@ class DatasetDSEC(torch.utils.data.Dataset):
         waymo_infos = []
         num_skipped_infos = 0
         for k in range(len(sample_sequence_list)):
-        # for k in range(10):
             sequence_name = os.path.splitext(sample_sequence_list[k])[0]
             if self.mode == 'train':
                 info_path = os.path.join(self.dataroot, sequence_name, ('%s.pkl' % sequence_name)).replace('.pkl', '_interpolate_fov_bbox_lidar_check.pkl')
@@ -208,12 +177,10 @@ class DatasetDSEC(torch.utils.data.Dataset):
                 continue
             with open(info_path, 'rb') as f:
                 infos = pickle.load(f)
-                
-            ######## 100 FPS ########
+
             if self.mode == 'train':
                 new_infos = []
-                infos = infos[:-1] # TODO 
-                # infos = infos[:1]
+                infos = infos[:-1]
                 
                 for i in range(len(infos)):
                     new_info = copy.deepcopy(infos[i])
@@ -249,16 +216,15 @@ class DatasetDSEC(torch.utils.data.Dataset):
                 infos = new_infos
             else:
                 new_infos = []
-                infos = infos[:-1] # TODO 
+                infos = infos[:-1]
 
                 for i in range(len(infos)):
                     new_info = copy.deepcopy(infos[i])
-                    if new_info['sample_idx']!=30:    
+                    if new_info['sample_idx']!=30:
                         self.dataloader_index.append(counter)
                     counter+=1
                     event_paths = []
                     event_grid_paths = []
-                    # new_info['annos'] = infos[i]['annos'][j]
                     img_infos = infos[i]['image']
                     lidar_path = os.path.join(self.dataroot, infos[i]['lidar_path'])
                     event_init_path = os.path.join(self.dataroot,
@@ -306,7 +272,6 @@ class DatasetDSEC(torch.utils.data.Dataset):
 
         crop_h = int(max(0, (resized_height - final_height) / 2))
         crop_w = int(max(0, (resized_width - final_width) / 2))
-        # Left, top, right, bottom crops.
         crop = (crop_w, crop_h, crop_w + final_width, crop_h + final_height)
 
         if resized_width != final_width:
@@ -321,50 +286,37 @@ class DatasetDSEC(torch.utils.data.Dataset):
                 }
 
     def get_lidar_range_data(self, sample_rec, nsweeps, min_distance):
-        """
-        Returns at most nsweeps of lidar in the ego frame.
-        Returned tensor is 5(x, y, z, reflectance, dt, ring_index) x N
-        Adapted from https://github.com/nutonomy/nuscenes-devkit/blob/master/python-sdk/nuscenes/utils/data_classes.py#L56
-        """
+        """Returns at most nsweeps of lidar in the ego frame."""
         if self.cfg.GEN.GEN_RANGE:
-            # points = np.zeros((5, 0))
             points = np.zeros((5, 0))
             V = 35000 * nsweeps
-            # Get reference pose and timestamp.
             ref_sd_token = sample_rec['data']['LIDAR_TOP']
             ref_sd_rec = self.nusc.get('sample_data', ref_sd_token)
             ref_pose_rec = self.nusc.get('ego_pose', ref_sd_rec['ego_pose_token'])
             ref_cs_rec = self.nusc.get('calibrated_sensor', ref_sd_rec['calibrated_sensor_token'])
             ref_time = 1e-6 * ref_sd_rec['timestamp']
 
-            # Homogeneous transformation matrix from global to _current_ ego car frame.
             car_from_global = transform_matrix(ref_pose_rec['translation'], Quaternion(ref_pose_rec['rotation']),
                                                 inverse=True)
 
-            # Aggregate current and previous sweeps.
             sample_data_token = sample_rec['data']['LIDAR_TOP']
             current_sd_rec = self.nusc.get('sample_data', sample_data_token)
             sample_sd_rec = current_sd_rec
             for _ in range(nsweeps):
-                # Load up the pointcloud and remove points close to the sensor.
                 current_pc = LidarPointCloud.from_file(os.path.join(self.nusc.dataroot, current_sd_rec['filename']))
                 current_pc.remove_close(min_distance)
 
-                # Get past pose.
                 current_pose_rec = self.nusc.get('ego_pose', current_sd_rec['ego_pose_token'])
                 global_from_car = transform_matrix(current_pose_rec['translation'],
                                                     Quaternion(current_pose_rec['rotation']), inverse=False)
 
-                # Homogeneous transformation matrix from sensor coordinate frame to ego car frame.
                 current_cs_rec = self.nusc.get('calibrated_sensor', current_sd_rec['calibrated_sensor_token'])
                 car_from_current = transform_matrix(current_cs_rec['translation'], Quaternion(current_cs_rec['rotation']),
                                                     inverse=False)
 
-                # Fuse four transformation matrices into one and perform transform.
                 trans_matrix = reduce(np.dot, [car_from_global, global_from_car, car_from_current])
                 current_pc.transform(trans_matrix)
 
-                # Add time vector which can be used as a temporal feature.
                 time_lag = ref_time - 1e-6 * current_sd_rec['timestamp']
                 times = time_lag * np.ones((1, current_pc.nbr_points()))
 
@@ -379,12 +331,9 @@ class DatasetDSEC(torch.utils.data.Dataset):
                     
                     
             if points.shape[1] > V:
-                    # # print('lidar_data.shape[0]', lidar_data.shape[0])
-                    # np.random.shuffle(lidar_data)
                 points = points[:,:V]
             elif points.shape[0] < V:
-                points = np.pad(points,[(0,0),(0, V-points.shape[1])],mode='constant')  
-                # Abort if there are no previous sweeps.
+                points = np.pad(points,[(0,0),(0, V-points.shape[1])],mode='constant')
             range_view = range_projection(points.transpose(1,0),  
                                         self.rv_config['range_image']['height'], self.rv_config['range_image']['width'],
                                         self.rv_config['range_image']['fov_up'], self.rv_config['range_image']['fov_down'],
@@ -409,24 +358,13 @@ class DatasetDSEC(torch.utils.data.Dataset):
         return tmp_cam
 
     def get_input_data(self, rec):
-        """
-        Parameters
-        ----------
-            rec: nuscenes identifier for a given timestamp
-
-        Returns
-        -------
-            images: torch.Tensor<float> (N, 3, H, W)
-            intrinsics: torch.Tensor<float> (3, 3)
-            extrinsics: torch.Tensor(N, 4, 4)
-        """
+        """Get camera images, intrinsics, and extrinsics for a given sample."""
         images = []
         intrinsics = []
         extrinsics = []
         depths = []
         cameras = self.cfg.IMAGE.NAMES
 
-        # From lidar egopose to world.
         lidar_sample = self.nusc.get('sample_data', rec['data']['LIDAR_TOP'])
         lidar_pose = self.nusc.get('ego_pose', lidar_sample['ego_pose_token'])
         yaw = Quaternion(lidar_pose['rotation']).yaw_pitch_roll[0]
@@ -1214,7 +1152,7 @@ class DatasetDSEC(torch.utils.data.Dataset):
             data_dict['gt_names'] = data_dict['gt_names'][selected]
             data_dict['gt_obj_ids'] = data_dict['gt_obj_ids'][selected]
             
-            gt_classes = np.array([self.class_names.index(n) + 1 for n in data_dict['gt_names']], dtype=np.int32)
+            gt_classes = np.array([self.class_names.index(n) for n in data_dict['gt_names']], dtype=np.int32)
             
             gt_obj_ids = np.array([n for n in data_dict['gt_obj_ids']])
             
@@ -1426,18 +1364,7 @@ class DatasetDSEC(torch.utils.data.Dataset):
             # 如果 TIME_RECEPTIVE_FIELD = 3，points 有 3 个元素（对应 3 个时间步）
             # 将多时间步的点云列表传递给模型，模型会按时间步处理
             input_dict['points'] = points  # 保留所有时间步的点云
-            # 调试信息：确认 points 被加载
-            if not hasattr(self, '_points_loaded_debug'):
-                print(f"[DSECData] use_lidar={self.use_lidar}, receptive_field={self.receptive_field}, "
-                      f"points loaded: {len(points)} time steps, "
-                      f"shapes={[p.shape if hasattr(p, 'shape') else type(p) for p in points]}")
-                self._points_loaded_debug = True
-        else:
-            # 调试信息：确认 use_lidar 状态
-            if not hasattr(self, '_lidar_disabled_debug'):
-                print(f"[DSECData] use_lidar={self.use_lidar}, skipping points loading")
-                self._lidar_disabled_debug = True
-        
+
         # 生成分割标签（时序）
         segmentation_list = []
         instance_list = []
@@ -1570,29 +1497,6 @@ class DatasetDSEC(torch.utils.data.Dataset):
                         if len(input_dict['events_grid']) > 0 and len(input_dict['evs_stmp']) > 0:
                             input_dict = self.get_data_flow(input_dict, target_idx_list)
 
-        # DEBUG: 检查 seq_annos 是否存在（仅打印一次）
-        if not hasattr(self, '_debug_seq_annos_printed'):
-            self._debug_seq_annos_printed = False
-
-        if not self._debug_seq_annos_printed:
-            print(f"[DEBUG DSECData] current_info keys: {list(current_info.keys())}")
-            print(f"[DEBUG DSECData] 'seq_annos' in current_info: {'seq_annos' in current_info}")
-            if 'seq_annos' in current_info:
-                print(f"[DEBUG DSECData] seq_annos len: {len(current_info['seq_annos'])}")
-                if len(current_info['seq_annos']) > 0:
-                    print(f"[DEBUG DSECData] seq_annos[0] keys: {current_info['seq_annos'][0].keys()}")
-                    print(f"[DEBUG DSECData] seq_annos[0]['gt_boxes_lidar'] shape: {current_info['seq_annos'][0]['gt_boxes_lidar'].shape}")
-                    print(f"[DEBUG DSECData] seq_annos[0]['name']: {current_info['seq_annos'][0]['name']}")
-                    # 打印实际的类别名称
-                    all_names = []
-                    for anno in current_info['seq_annos']:
-                        if isinstance(anno, dict) and 'name' in anno:
-                            all_names.extend(anno['name'].tolist() if hasattr(anno['name'], 'tolist') else list(anno['name']))
-                    unique_names = set(all_names)
-                    print(f"[DEBUG DSECData] 实际类别名称（unique）: {unique_names}")
-                    print(f"[DEBUG DSECData] self.class_names: {self.class_names}")
-            self._debug_seq_annos_printed = True
-
         if 'seq_annos' in current_info:
 
             gt_boxes_lidar = []
@@ -1627,24 +1531,6 @@ class DatasetDSEC(torch.utils.data.Dataset):
             })
         data_dict = self.prepare_data(data_dict=copy.deepcopy(input_dict))
 
-        # DEBUG: 验证 prepare_data 后的标签（仅打印一次）
-        if not hasattr(self, '_debug_labels_printed'):
-            self._debug_labels_printed = False
-
-        if not self._debug_labels_printed and 'gt_labels_3d' in data_dict:
-            gt_labels = data_dict['gt_labels_3d']
-            if len(gt_labels) > 0:
-                print(f"[DEBUG DSECData] prepare_data 后的 gt_labels_3d:")
-                print(f"  shape: {gt_labels.shape}")
-                print(f"  dtype: {gt_labels.dtype}")
-                print(f"  unique values: {torch.unique(gt_labels).tolist()}")
-                print(f"  first 10: {gt_labels[:10].tolist() if len(gt_labels) >= 10 else gt_labels.tolist()}")
-                # 统计各类别数量
-                for i in range(3):
-                    count = (gt_labels == i).sum().item()
-                    print(f"  class {i} count: {count}")
-                self._debug_labels_printed = True
-
         # 构建检测任务的metas（如果启用检测）
         if getattr(self.cfg, 'DETECTION', None) and getattr(self.cfg.DETECTION, 'ENABLED', False):
             # 计算BEV网格参数
@@ -1667,30 +1553,7 @@ class DatasetDSEC(torch.utils.data.Dataset):
                 'box_type_3d': LiDARInstance3DBoxes,  # 提供box类型以便解码/评估
             }
             data_dict['metas'] = [meta]  # list of dict，每个样本一个meta
-        
-        # 输出单个样本的数据尺寸（仅在第一次或偶尔输出，避免过多日志）
-        if not hasattr(self, '_data_size_logged') or self._data_size_logged < 1:
-            print("[Dataset] Sample data sizes:")
-            if 'event' in data_dict and isinstance(data_dict['event'], dict):
-                if 'frames' in data_dict['event']:
-                    event_frames = data_dict['event']['frames']
-                    if torch.is_tensor(event_frames):
-                        print(f"  event.frames: {event_frames.shape}")
-            if 'images' in data_dict:
-                images = data_dict['images']
-                if isinstance(images, dict):
-                    for cam_name, img_list in images.items():
-                        if isinstance(img_list, (list, tuple)) and len(img_list) > 0:
-                            if torch.is_tensor(img_list[0]):
-                                print(f"  images[{cam_name}]: list of {len(img_list)} tensors, each {img_list[0].shape}")
-                            elif isinstance(img_list[0], np.ndarray):
-                                print(f"  images[{cam_name}]: list of {len(img_list)} arrays, each {img_list[0].shape}")
-                elif torch.is_tensor(images):
-                    print(f"  images: {images.shape}")
-            if not hasattr(self, '_data_size_logged'):
-                self._data_size_logged = 0
-            self._data_size_logged += 1
-        
+
         return data_dict
 
 

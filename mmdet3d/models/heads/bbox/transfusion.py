@@ -585,18 +585,6 @@ class TransFusionHead(nn.Module):
         heatmap = gt_bboxes_3d.new_zeros(
             self.num_classes, feature_map_size[1], feature_map_size[0]
         )
-        # DEBUG: 验证 heatmap 绘制时的 label 值（仅打印一次）
-        if not hasattr(self, '_debug_heatmap_draw_printed'):
-            self._debug_heatmap_draw_printed = False
-
-        if not self._debug_heatmap_draw_printed and len(gt_labels_3d) > 0:
-            print(f"[DEBUG get_targets_single] 绘制 heatmap:")
-            print(f"  gt_labels_3d type: {type(gt_labels_3d)}")
-            print(f"  gt_labels_3d unique: {gt_labels_3d.unique().tolist() if hasattr(gt_labels_3d, 'unique') else 'N/A'}")
-            print(f"  gt_labels_3d first 10: {gt_labels_3d[:10].tolist() if len(gt_labels_3d) >= 10 else gt_labels_3d.tolist()}")
-            print(f"  self.num_classes (heatmap channels): {self.num_classes}")
-            print(f"  heatmap shape: {heatmap.shape}")
-            self._debug_heatmap_draw_printed = True
 
         for idx in range(len(gt_bboxes_3d)):
             width = gt_bboxes_3d[idx][3]
@@ -656,21 +644,6 @@ class TransFusionHead(nn.Module):
         Returns:
             dict[str:torch.Tensor]: Loss of heatmap and bbox of each task.
         """
-        # DEBUG: 验证 gt_labels_3d（仅打印一次）
-        if not hasattr(self, '_debug_loss_printed'):
-            self._debug_loss_printed = False
-
-        if not self._debug_loss_printed:
-            print(f"[DEBUG TransFusionHead.loss] gt_labels_3d:")
-            for i, labels in enumerate(gt_labels_3d):
-                if len(labels) > 0:
-                    print(f"  batch {i}: unique values = {labels.unique().tolist()}, len = {len(labels)}")
-                else:
-                    print(f"  batch {i}: empty")
-            print(f"[DEBUG TransFusionHead.loss] self.num_classes: {self.num_classes}")
-            print(f"[DEBUG TransFusionHead.loss] self.use_sigmoid_cls: {self.use_sigmoid_cls}")
-            self._debug_loss_printed = True
-
         (
             labels,
             label_weights,
@@ -681,19 +654,6 @@ class TransFusionHead(nn.Module):
             matched_ious,
             heatmap,
         ) = self.get_targets(gt_bboxes_3d, gt_labels_3d, preds_dicts[0])
-
-        # DEBUG: 验证 heatmap target 的通道分布（仅打印一次）
-        if not hasattr(self, '_debug_heatmap_target_printed'):
-            self._debug_heatmap_target_printed = False
-
-        if not self._debug_heatmap_target_printed:
-            print(f"[DEBUG TransFusionHead.loss] heatmap target 统计:")
-            print(f"  shape: {heatmap.shape}")
-            for c in range(heatmap.shape[1]):
-                ch_sum = heatmap[:, c].sum().item()
-                ch_max = heatmap[:, c].max().item()
-                print(f"  channel {c}: sum = {ch_sum:.2f}, max = {ch_max:.4f}")
-            self._debug_heatmap_target_printed = True
 
         if hasattr(self, "on_the_image_mask"):
             label_weights = label_weights * self.on_the_image_mask
