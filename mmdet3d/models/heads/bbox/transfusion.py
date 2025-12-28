@@ -293,6 +293,15 @@ class TransFusionHead(nn.Module):
                 :,
                 2,
             ] = F.max_pool2d(heatmap[:, 2], kernel_size=1, stride=1, padding=0)
+        elif self.test_cfg["dataset"] == "dsec":  # for Cyclist & Pedestrian in DSEC
+            local_max[
+                :,
+                1,
+            ] = F.max_pool2d(heatmap[:, 1], kernel_size=1, stride=1, padding=0)
+            local_max[
+                :,
+                2,
+            ] = F.max_pool2d(heatmap[:, 2], kernel_size=1, stride=1, padding=0)
         heatmap = heatmap * (heatmap == local_max)
         heatmap = heatmap.view(batch_size, heatmap.shape[1], -1)
 
