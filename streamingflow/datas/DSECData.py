@@ -1569,7 +1569,17 @@ class DatasetDSEC(torch.utils.data.Dataset):
                     if 'events_grid' in input_dict and 'evs_stmp' in input_dict:
                         if len(input_dict['events_grid']) > 0 and len(input_dict['evs_stmp']) > 0:
                             input_dict = self.get_data_flow(input_dict, target_idx_list)
-            
+
+        # DEBUG: 检查 seq_annos 是否存在
+        print(f"[DEBUG DSECData] current_info keys: {list(current_info.keys())}")
+        print(f"[DEBUG DSECData] 'seq_annos' in current_info: {'seq_annos' in current_info}")
+        if 'seq_annos' in current_info:
+            print(f"[DEBUG DSECData] seq_annos len: {len(current_info['seq_annos'])}")
+            if len(current_info['seq_annos']) > 0:
+                print(f"[DEBUG DSECData] seq_annos[0] keys: {current_info['seq_annos'][0].keys()}")
+                print(f"[DEBUG DSECData] seq_annos[0]['gt_boxes_lidar'] shape: {current_info['seq_annos'][0]['gt_boxes_lidar'].shape}")
+                print(f"[DEBUG DSECData] seq_annos[0]['name']: {current_info['seq_annos'][0]['name']}")
+
         if 'seq_annos' in current_info:
 
             gt_boxes_lidar = []
