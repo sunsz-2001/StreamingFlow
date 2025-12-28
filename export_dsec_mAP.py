@@ -194,6 +194,13 @@ def export_and_eval(_cfg_path: str, checkpoint: str, dataroot: str, iou_thr: flo
     if hparams is None:
         raise KeyError("Checkpoint is missing 'hyper_parameters'")
     trainer = TrainingModule(hparams)
+
+    # 加载训练好的模型权重
+    state_dict = ckpt.get("state_dict")
+    if state_dict is None:
+        raise KeyError("Checkpoint is missing 'state_dict'")
+    trainer.load_state_dict(state_dict)
+
     trainer.eval().to(device)
 
     trainer.model.cfg = cfg
