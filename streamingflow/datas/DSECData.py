@@ -1570,15 +1570,28 @@ class DatasetDSEC(torch.utils.data.Dataset):
                         if len(input_dict['events_grid']) > 0 and len(input_dict['evs_stmp']) > 0:
                             input_dict = self.get_data_flow(input_dict, target_idx_list)
 
-        # DEBUG: 检查 seq_annos 是否存在
-        print(f"[DEBUG DSECData] current_info keys: {list(current_info.keys())}")
-        print(f"[DEBUG DSECData] 'seq_annos' in current_info: {'seq_annos' in current_info}")
-        if 'seq_annos' in current_info:
-            print(f"[DEBUG DSECData] seq_annos len: {len(current_info['seq_annos'])}")
-            if len(current_info['seq_annos']) > 0:
-                print(f"[DEBUG DSECData] seq_annos[0] keys: {current_info['seq_annos'][0].keys()}")
-                print(f"[DEBUG DSECData] seq_annos[0]['gt_boxes_lidar'] shape: {current_info['seq_annos'][0]['gt_boxes_lidar'].shape}")
-                print(f"[DEBUG DSECData] seq_annos[0]['name']: {current_info['seq_annos'][0]['name']}")
+        # DEBUG: 检查 seq_annos 是否存在（仅打印一次）
+        if not hasattr(self, '_debug_seq_annos_printed'):
+            self._debug_seq_annos_printed = False
+
+        if not self._debug_seq_annos_printed:
+            print(f"[DEBUG DSECData] current_info keys: {list(current_info.keys())}")
+            print(f"[DEBUG DSECData] 'seq_annos' in current_info: {'seq_annos' in current_info}")
+            if 'seq_annos' in current_info:
+                print(f"[DEBUG DSECData] seq_annos len: {len(current_info['seq_annos'])}")
+                if len(current_info['seq_annos']) > 0:
+                    print(f"[DEBUG DSECData] seq_annos[0] keys: {current_info['seq_annos'][0].keys()}")
+                    print(f"[DEBUG DSECData] seq_annos[0]['gt_boxes_lidar'] shape: {current_info['seq_annos'][0]['gt_boxes_lidar'].shape}")
+                    print(f"[DEBUG DSECData] seq_annos[0]['name']: {current_info['seq_annos'][0]['name']}")
+                    # 打印实际的类别名称
+                    all_names = []
+                    for anno in current_info['seq_annos']:
+                        if isinstance(anno, dict) and 'name' in anno:
+                            all_names.extend(anno['name'].tolist() if hasattr(anno['name'], 'tolist') else list(anno['name']))
+                    unique_names = set(all_names)
+                    print(f"[DEBUG DSECData] 实际类别名称（unique）: {unique_names}")
+                    print(f"[DEBUG DSECData] self.class_names: {self.class_names}")
+            self._debug_seq_annos_printed = True
 
         if 'seq_annos' in current_info:
 
@@ -1613,7 +1626,25 @@ class DatasetDSEC(torch.utils.data.Dataset):
                 'gt_obj_ids': gt_obj_ids
             })
         data_dict = self.prepare_data(data_dict=copy.deepcopy(input_dict))
-        
+
+        # DEBUG: 验证 prepare_data 后的标签（仅打印一次）
+        if not hasattr(self, '_debug_labels_printed'):
+            self._debug_labels_printed = False
+
+        if not self._debug_labels_printed and 'gt_labels_3d' in data_dict:
+            gt_labels = data_dict['gt_labels_3d']
+            if len(gt_labels) > 0:
+                print(f"[DEBUG DSECData] prepare_data 后的 gt_labels_3d:")
+                print(f"  shape: {gt_labels.shape}")
+                print(f"  dtype: {gt_labels.dtype}")
+                print(f"  unique values: {torch.unique(gt_labels).tolist()}")
+                print(f"  first 10: {gt_labels[:10].tolist() if len(gt_labels) >= 10 else gt_labels.tolist()}")
+                # 统计各类别数量
+                for i in range(3):
+                    count = (gt_labels == i).sum().item()
+                    print(f"  class {i} count: {count}")
+                self._debug_labels_printed = True
+
         # 构建检测任务的metas（如果启用检测）
         if getattr(self.cfg, 'DETECTION', None) and getattr(self.cfg.DETECTION, 'ENABLED', False):
             # 计算BEV网格参数
