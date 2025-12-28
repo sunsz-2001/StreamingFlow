@@ -77,6 +77,7 @@ class DetectionDecoder(nn.Module):
             in_channels=cfg.MODEL.TEMPORAL_MODEL.START_OUT_CHANNELS,
             hidden_channel=cfg.DETECTION.HIDDEN_CHANNEL,
             num_classes=cfg.DETECTION.NUM_CLASSES,
+            use_sigmoid_cls=True,
             num_decoder_layers=cfg.DETECTION.NUM_DECODER_LAYERS,
             num_heads=cfg.DETECTION.NUM_HEADS,
             nms_kernel_size=cfg.DETECTION.NMS_KERNEL_SIZE,

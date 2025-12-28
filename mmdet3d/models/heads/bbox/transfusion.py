@@ -63,6 +63,7 @@ class TransFusionHead(nn.Module):
         in_channels=128 * 3,
         hidden_channel=128,
         num_classes=4,
+        use_sigmoid_cls=True,
         # config for Transformer
         num_decoder_layers=3,
         num_heads=8,
@@ -78,7 +79,7 @@ class TransFusionHead(nn.Module):
         norm_cfg=dict(type="BN1d"),
         bias="auto",
         # loss
-        loss_cls=dict(type="GaussianFocalLoss", reduction="mean", use_sigmoid=True),
+        loss_cls=dict(type="GaussianFocalLoss", reduction="mean"),
         loss_iou=dict(
             type="VarifocalLoss", use_sigmoid=True, iou_weighted=True, reduction="mean"
         ),
@@ -104,7 +105,7 @@ class TransFusionHead(nn.Module):
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
 
-        self.use_sigmoid_cls = loss_cls.get("use_sigmoid", False)
+        self.use_sigmoid_cls = use_sigmoid_cls
         if not self.use_sigmoid_cls:
             self.num_classes += 1
         self.loss_cls = build_loss(loss_cls)
