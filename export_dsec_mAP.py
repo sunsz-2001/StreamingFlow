@@ -194,21 +194,28 @@ def export_and_eval(_cfg_path: str, checkpoint: str, dataroot: str, iou_thr: flo
     if hparams is None:
         raise KeyError("Checkpoint is missing 'hyper_parameters'")
     trainer = TrainingModule(hparams)
-
-    # 加载训练好的模型权重
-    state_dict = ckpt.get("state_dict")
-    if state_dict is None:
-        raise KeyError("Checkpoint is missing 'state_dict'")
-    trainer.load_state_dict(state_dict)
-
-    trainer.eval().to(device)
-
     trainer.model.cfg = cfg
     trainer.model.use_lidar = cfg.MODEL.MODALITY.USE_LIDAR
     trainer.model.use_event = cfg.MODEL.MODALITY.USE_EVENT
     trainer.model.use_camera = cfg.MODEL.MODALITY.USE_CAMERA
 
     _, valloader = prepare_dataloaders(cfg)
+
+    # 加载训练好的模型权重
+    state_dict = ckpt.get("state_dict")
+    if state_dict is None:
+        raise KeyError("Checkpoint is missing 'state_dict'")
+
+    needs_lidar_init = any(k.startswith("model.temporal_model_lidar") for k in state_dict)
+    if needs_lidar_init and trainer.model.temporal_model_lidar is None:
+        trainer.eval().to(device)
+        init_batch = next(iter(valloader))
+        init_batch = to_device(init_batch, device)
+        with torch.no_grad():
+            gather_batch_outputs(trainer.model, init_batch, device, cfg=cfg, decode=False)
+
+    trainer.load_state_dict(state_dict)
+    trainer.eval().to(device)
 
     preds_all, gts_all = [], {}
     class_names = ["Vehicle", "Cyclist", "Pedestrian"]
