@@ -171,7 +171,7 @@ class streamingflow(nn.Module):
             )
 
         if self.use_lidar:
-            voxel_size = [0.1,0.1,0.4]
+            voxel_size = [0.1,0.1,0.2]
             area_extents = np.array(self.cfg.VOXEL.AREA_EXTENTS, dtype=np.float32)
             point_cloud_range = [
                 float(area_extents[0][0]),
@@ -187,7 +187,7 @@ class streamingflow(nn.Module):
             x_size = int(np.floor((x_range / voxel_size[0]) + 0.5))
             y_size = int(np.floor((y_range / voxel_size[1]) + 0.5))
             z_size = int(np.floor((z_range / voxel_size[2]) + 0.5))
-            sparse_shape = [z_size, y_size, x_size]
+            sparse_shape = [x_size, y_size, z_size]
 
             encoders = {
                 'lidar': {
@@ -376,14 +376,16 @@ class streamingflow(nn.Module):
             return torch.zeros((0, self.encoders["lidar"]["backbone"].out_channels),
                              device=feats.device, dtype=feats.dtype)
 
-        batch_size = int(coords[-1, 0].item()) + 1
+        batch_size = coords[-1, 0] + 1
+        # batch_size = int(coords[-1, 0].item()) + 1
 
+        coords = coords.contiguous()
         # coords = coords[:, [0, 3, 2, 1]].contiguous()
 
         if coords.shape[1] >= 4:
-            z_coords = coords[:, 3]
+            z_coords = coords[:, 1]
             y_coords = coords[:, 2]
-            x_coords = coords[:, 1]
+            x_coords = coords[:, 3]
             sparse_shape = self.encoders['lidar']['backbone'].sparse_shape
             if z_coords.max().item() >= sparse_shape[0]:
                 print(f"[ERROR] Z coordinate overflow: {z_coords.max().item()} >= {sparse_shape[0]}")
