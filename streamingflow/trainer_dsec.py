@@ -213,7 +213,7 @@ class TrainingModule(pl.LightningModule):
         labels = self.prepare_future_labels(batch) if not (getattr(self.cfg, 'DETECTION', None) and getattr(self.cfg.DETECTION, 'ENABLED', False)) else {}
 
         # Forward pass
-        event = batch['event'] if self.cfg.MODEL.MODALITY.USE_EVENT else None
+        # event = batch['event'] if self.cfg.MODEL.MODALITY.USE_EVENT else None
         
         output = self.model(
             image, intrinsics, extrinsics, future_egomotion, padded_voxel_points,camera_timestamps, points,lidar_timestamps,target_timestamp,
