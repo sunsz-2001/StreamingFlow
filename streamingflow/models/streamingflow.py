@@ -171,7 +171,7 @@ class streamingflow(nn.Module):
             )
 
         if self.use_lidar:
-            voxel_size = [float(v) for v in self.cfg.VOXEL.VOXEL_SIZE]
+            voxel_size = [0.1,0.1,0.4]
             area_extents = np.array(self.cfg.VOXEL.AREA_EXTENTS, dtype=np.float32)
             point_cloud_range = [
                 float(area_extents[0][0]),
@@ -217,15 +217,15 @@ class streamingflow(nn.Module):
                     'with_skip_connect': True,
                     'start_out_channels': 256,
                     'det_grid_conf': {
-                        'xbound': [-54.0, 54.0, 0.6],
-                        'ybound': [-54.0, 54.0, 0.6],
-                        'zbound': [-10.0, 10.0, 20.0],
+                        'xbound': [0, 54.0, 0.6],
+                        'ybound': [-32, 32, 0.6],
+                        'zbound': [-5, 3, .0],
                         'dbound': [1.0, 60.0, 1.0],
                     },
                     'grid_conf': {
-                        'xbound': [-51.2, 51.2, 0.8],
-                        'ybound': [-51.2, 51.2, 0.8],
-                        'zbound': [-10.0, 10.0, 20.0],
+                        'xbound': [0, 51.2, 0.8],
+                        'ybound': [-32, 32, 0.8],
+                        'zbound': [-5, 3, 8.0],
                         'dbound': [1.0, 60.0, 1.0],
                     },
                 },
@@ -378,12 +378,12 @@ class streamingflow(nn.Module):
 
         batch_size = int(coords[-1, 0].item()) + 1
 
-        coords = coords[:, [0, 3, 2, 1]].contiguous()
+        # coords = coords[:, [0, 3, 2, 1]].contiguous()
 
         if coords.shape[1] >= 4:
-            z_coords = coords[:, 1]
+            z_coords = coords[:, 3]
             y_coords = coords[:, 2]
-            x_coords = coords[:, 3]
+            x_coords = coords[:, 1]
             sparse_shape = self.encoders['lidar']['backbone'].sparse_shape
             if z_coords.max().item() >= sparse_shape[0]:
                 print(f"[ERROR] Z coordinate overflow: {z_coords.max().item()} >= {sparse_shape[0]}")
