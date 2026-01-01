@@ -90,7 +90,6 @@ _C.LIFT.GT_DEPTH = True
 _C.LIFT.GEN_DEPTH = False
 _C.LIFT.DISCOUNT = 0.5
 
-
 _C.GEN = CN()
 _C.GEN.GEN_DEPTH = False
 _C.GEN.GEN_RANGE = False
@@ -150,8 +149,8 @@ _C.MODEL.EVENT.DOWNSAMPLE = 8  # Event encoder downsampling rate (fixed for Even
 
 
 _C.VOXEL = CN()  # Lidar pointcloud voxelization
-_C.VOXEL.VOXEL_SIZE = (0.1, 0.1, 0.4)
-_C.VOXEL.AREA_EXTENTS = [[0, 51.2], [-32, 32], [-4, 4]]
+_C.VOXEL.VOXEL_SIZE = (0.8, 0.8, 0.4)
+_C.VOXEL.AREA_EXTENTS = [[0, 51.2], [-32, 32], [-5, 3]]
 
 
 _C.MODEL.LIDAR.HEIGHT_FEAT_SIZE = int((_C.VOXEL.AREA_EXTENTS[2][1]-_C.VOXEL.AREA_EXTENTS[2][0])/_C.VOXEL.VOXEL_SIZE[2]) + 1

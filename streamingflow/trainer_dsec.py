@@ -172,6 +172,9 @@ class TrainingModule(pl.LightningModule):
             B = len(image)
         elif self.cfg.MODEL.MODALITY.USE_EVENT and batch.get('event') is not None:
             event = flow_data[0]['flow_events']
+            if torch.is_tensor(event) and event.dim() == 5:
+                event = event.unsqueeze(2)  # [B, S, 1, C, H, W]
+
             if torch.is_tensor(event):
                 B = event.shape[0]
             elif isinstance(event, dict) and 'frames' in event:
@@ -214,7 +217,7 @@ class TrainingModule(pl.LightningModule):
 
         # Forward pass
         # event = batch['event'] if self.cfg.MODEL.MODALITY.USE_EVENT else None
-        
+
         output = self.model(
             image, intrinsics, extrinsics, future_egomotion, padded_voxel_points,camera_timestamps, points,lidar_timestamps,target_timestamp,
             image_hi=batch.get('image_hi'), intrinsics_hi=batch.get('intrinsics_hi'), extrinsics_hi=batch.get('extrinsics_hi'),

@@ -47,7 +47,7 @@ _C.PRETRAINED.LOAD_WEIGHTS = False
 _C.PRETRAINED.PATH = ''
 
 _C.DATASET = CN()
-_C.DATASET.DATAROOT = '/media/switcher/sda/datasets/dsec/'
+_C.DATASET.DATAROOT = 'data/nuscenes'
 _C.DATASET.VERSION = 'trainval'
 _C.DATASET.NAME = 'nuscenes'
 _C.DATASET.MAP_FOLDER = 'data/nuscenes'
@@ -81,11 +81,11 @@ _C.IMAGE.ORIGINAL_WIDTH = 1600  # Original input RGB camera width
 _C.IMAGE.NAMES = ['CAM_FRONT_LEFT', 'CAM_FRONT', 'CAM_FRONT_RIGHT', 'CAM_BACK_LEFT', 'CAM_BACK', 'CAM_BACK_RIGHT']
 
 _C.LIFT = CN()  # image to BEV lifting
-_C.LIFT.X_BOUND = [0, 51.2, 0.8]  # Forward
-_C.LIFT.Y_BOUND = [-32, 32, 0.8]  # Sides
+_C.LIFT.X_BOUND = [-51.2, 51.2, 0.8]  # Forward
+_C.LIFT.Y_BOUND = [-51.2, 51.2, 0.8]  # Sides
 _C.LIFT.Z_BOUND = [-10.0, 10.0, 20.0]  # Height
 _C.LIFT.D_BOUND = [2.0, 50.0, 1.0]
-_C.LIFT.RANGE = [0, -32, -4, 51.2, 32, 4.0]
+_C.LIFT.RANGE = [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
 _C.LIFT.GT_DEPTH = True
 _C.LIFT.GEN_DEPTH = False
 _C.LIFT.DISCOUNT = 0.5
@@ -150,8 +150,8 @@ _C.MODEL.EVENT.DOWNSAMPLE = 8  # Event encoder downsampling rate (fixed for Even
 
 
 _C.VOXEL = CN()  # Lidar pointcloud voxelization
-_C.VOXEL.VOXEL_SIZE = (0.1, 0.1, 0.4)
-_C.VOXEL.AREA_EXTENTS = [[0, 51.2], [-32, 32], [-4, 4]]
+_C.VOXEL.VOXEL_SIZE = (0.8, 0.8, 0.4)
+_C.VOXEL.AREA_EXTENTS = [[-51.2, 51.2], [-51.2, 51.2], [-3, 2]]
 
 
 _C.MODEL.LIDAR.HEIGHT_FEAT_SIZE = int((_C.VOXEL.AREA_EXTENTS[2][1]-_C.VOXEL.AREA_EXTENTS[2][0])/_C.VOXEL.VOXEL_SIZE[2]) + 1
@@ -258,7 +258,7 @@ _C.COST_FUNCTION.VOLUME = 100.
 
 def get_parser():
     parser = argparse.ArgumentParser(description='Fiery training')
-    parser.add_argument('--config-file', default='/home/user/sunsz/StreamingFlow/streamingflow/configs/dsec_event_lidar.yaml', metavar='FILE', help='path to config file')
+    parser.add_argument('--config-file', default='', metavar='FILE', help='path to config file')
     parser.add_argument(
         'opts', help='Modify config options using the command-line', default=None, nargs=argparse.REMAINDER,
     )

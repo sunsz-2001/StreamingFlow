@@ -3,7 +3,7 @@ import torch.nn as nn
 import numpy as np
 import pytorch_lightning as pl
 
-from streamingflow.config import get_cfg
+from streamingflow.config_debug import get_cfg
 from streamingflow.models.streamingflow import streamingflow
 from streamingflow.losses import SpatialRegressionLoss, SegmentationLoss, HDmapLoss, DepthLoss
 from streamingflow.metrics import IntersectionOverUnion, PanopticMetric, PlanningMetric
