@@ -802,8 +802,10 @@ class streamingflow(nn.Module):
             # 注意：camera_states 和 lidar_states 已经统一到标准尺寸，空间尺寸一致
             
             # 对齐 timestamp 到 receptive_field，防止在 FuturePredictionODE 中索引越界
-            camera_timestamp_ode = camera_timestamp[:, :self.receptive_field] if camera_timestamp is not None else None
-            lidar_timestamp_ode = lidar_timestamp[:, :self.receptive_field] if lidar_timestamp is not None else None
+            camera_timestamp_ode = camera_timestamp
+            # camera_timestamp_ode = camera_timestamp[:, :self.receptive_field] if camera_timestamp is not None else None
+            lidar_timestamp_ode = lidar_timestamp
+            # lidar_timestamp_ode = lidar_timestamp[:, :self.receptive_field] if lidar_timestamp is not None else None
 
             future_states, auxilary_loss = self.future_prediction_ode(
                 future_prediction_input,  # 已经是标准尺寸

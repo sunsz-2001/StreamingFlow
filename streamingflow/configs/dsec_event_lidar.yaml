@@ -47,7 +47,7 @@ DATASET:
   EVENT_CAMERAS: ['camera_0']
   VERSION: 'trainval'
 
-TIME_RECEPTIVE_FIELD: 3  # 时间感受野（过去帧数），1 表示只使用当前帧
+TIME_RECEPTIVE_FIELD: 6  # 时间感受野（过去帧数），1 表示只使用当前帧
 N_FUTURE_FRAMES: 1  # 未来预测帧数
 # 【重要】启用异步融合需要设置 N_FUTURE_FRAMES > 0
 # - N_FUTURE_FRAMES > 0: 启用未来预测和异步融合，FuturePredictionODE 会处理异步对齐

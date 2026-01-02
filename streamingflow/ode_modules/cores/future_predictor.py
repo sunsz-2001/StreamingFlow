@@ -168,7 +168,7 @@ class FuturePredictionODE(nn.Module):
                 input=input_bs,
                 obs=observations,
                 delta_t=self.delta_t,
-                T=T,
+                T=T+1e-4,
             )
             batch_outputs.append(predict_x)
 
