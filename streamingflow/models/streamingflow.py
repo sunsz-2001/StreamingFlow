@@ -864,7 +864,7 @@ class streamingflow(nn.Module):
                 past_states = past_states_projected.view(B, T, future_states_channels, H, W)
             
             # 拼接过去帧和未来帧: [B, TIME_RECEPTIVE_FIELD + n_future, C, H, W]
-            states = torch.cat([past_states, future_states], dim=1)
+            states = future_states.squeeze(1)
     
             # predict BEV outputs
             # Check states before passing to decoder

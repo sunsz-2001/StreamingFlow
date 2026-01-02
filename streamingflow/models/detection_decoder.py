@@ -152,12 +152,13 @@ class DetectionDecoder(nn.Module):
             dict: 包含'detection'键，值为TransFusion head的输出
         """
         # 使用最后一帧进行检测（检测关注当前时刻）
-        if states.dim() == 5:
-            bev_feat = states[:, -1]  # [B, C, H, W]
-        elif states.dim() == 4:
-            bev_feat = states  # [B, C, H, W]
-        else:
-            raise ValueError(f"Expected states to be 4D or 5D, got {states.dim()}D")
+        # if states.dim() == 5:
+        #     bev_feat = states[:, -1]  # [B, C, H, W]
+        # elif states.dim() == 4:
+        #     bev_feat = states  # [B, C, H, W]
+        # else:
+        #     raise ValueError(f"Expected states to be 4D or 5D, got {states.dim()}D")
+        bev_feat = states  # [B, C, H, W]
         
         # 下采样BEV特征到TransFusion期望的尺寸
         # TransFusion期望的feature map尺寸 = grid_size // out_size_factor
