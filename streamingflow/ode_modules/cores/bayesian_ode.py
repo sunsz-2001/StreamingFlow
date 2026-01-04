@@ -197,8 +197,8 @@ class NNFOwithBayesianJumps(nn.Module):
         # print(f"  Target Times (T): {T.detach().cpu().numpy() if T.numel() < 10 else T[:5].detach().cpu().numpy()}")
         # print(f"  Delta T: {delta_t}")
         # print(f"  Use Variable Step: {self.use_variable_ode_step}")
-        if self.use_variable_ode_step:
-            print("  (Variable step enabled: will jump directly to next observation)")
+        # if self.use_variable_ode_step:
+        #     print("  (Variable step enabled: will jump directly to next observation)")
         
         hx_obs, _ = self.srvp_encode(obs)
         input_encoded, _ = self.srvp_encode(input)

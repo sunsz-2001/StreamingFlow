@@ -333,6 +333,6 @@ class HybridEncoder(nn.Module):
             out = self.pan_blocks[idx](torch.concat([downsample_feat, feat_high], dim=1))
             outs.append(out)
         
-        print(f"[HybridEncoder] input: {[f.shape for f in feats]} -> output: {[o.shape for o in outs]}")
+        # print(f"[HybridEncoder] input: {[f.shape for f in feats]} -> output: {[o.shape for o in outs]}")
 
         return outs

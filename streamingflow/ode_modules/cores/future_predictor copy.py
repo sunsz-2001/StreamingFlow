@@ -47,12 +47,11 @@ class FuturePredictionODE(nn.Module):
         for i in range(self.n_spatial_gru):
             # 每个 SpatialGRU 都把序列维度当作时间，保持未来序列的空间一致性。
             spatial_grus.append(SpatialGRU(in_channels, in_channels))
-            res_blocks.append(nn.Sequential(*[Block(in_channels) for _ in range(n_res_layers)]))
-            # if i < self.n_spatial_gru - 1:
-            #     res_blocks.append(nn.Sequential(*[Block(in_channels) for _ in range(n_res_layers)]))
-            # else:
-            #     # 最后一层使用 DeepLab 头，将特征上采样/投影回解码器期望的 BEV 尺寸。
-            #     res_blocks.append(DeepLabHead(in_channels, in_channels, 128))
+            if i < self.n_spatial_gru - 1:
+                res_blocks.append(nn.Sequential(*[Block(in_channels) for _ in range(n_res_layers)]))
+            else:
+                # 最后一层使用 DeepLab 头，将特征上采样/投影回解码器期望的 BEV 尺寸。
+                res_blocks.append(DeepLabHead(in_channels, in_channels, 128))
 
         self.spatial_grus = nn.ModuleList(spatial_grus)
         self.res_blocks = nn.ModuleList(res_blocks)
@@ -180,7 +179,7 @@ class FuturePredictionODE(nn.Module):
             # 对预测序列做循环细化。以第一帧隐状态作为种子，可在 ODE 预测漂移时保持时间上下文。
             x = self.spatial_grus[i](x, hidden_state)
             b, s, c, h, w = x.shape
-            # print('FPODE:x.shape:',x.shape, x.device)
+            print('FPODE:x.shape:',x.shape, x.device)
             x = self.res_blocks[i](x.view(b * s, c, h, w))
             x = x.view(b, s, c, h, w)
         return x, auxilary_loss

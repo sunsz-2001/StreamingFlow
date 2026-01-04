@@ -107,56 +107,9 @@ def dsec_collate_fn(batch):
         for key, values in preserved_string_data.items():
             if values:
                 collated[key] = values  # 保持为 list
-        
-        # 输出数据尺寸信息
-        if collated:
-            # print("[DataLoader] Batch sizes:")
-            # 输出 event frames 尺寸
-            if 'event' in collated and isinstance(collated['event'], dict):
-                if 'frames' in collated['event']:
-                    event_frames = collated['event']['frames']
-                    if torch.is_tensor(event_frames):
-                        print(f"  event.frames: {event_frames.shape}")
-            
-            # 输出 images 尺寸
-            if 'images' in collated:
-                images = collated['images']
-                if isinstance(images, dict):
-                    for cam_name, img_list in images.items():
-                        if isinstance(img_list, (list, tuple)) and len(img_list) > 0:
-                            if torch.is_tensor(img_list[0]):
-                                print(f"  images[{cam_name}]: list of {len(img_list)} tensors, each {img_list[0].shape}")
-                            elif isinstance(img_list[0], np.ndarray):
-                                print(f"  images[{cam_name}]: list of {len(img_list)} arrays, each {img_list[0].shape}")
-                elif torch.is_tensor(images):
-                    print(f"  images: {images.shape}")
-            
-            # 输出 points 信息（如果存在）
-            if 'points' in collated:
-                points = collated['points']
-                if isinstance(points, list) and len(points) > 0:
-                    if torch.is_tensor(points[0]):
-                        print(f"  points: list of {len(points)} tensors, first shape: {points[0].shape}")
-                    elif isinstance(points[0], np.ndarray):
-                        print(f"  points: list of {len(points)} arrays, first shape: {points[0].shape}")
-                elif torch.is_tensor(points):
-                    print(f"  points: {points.shape}")
-            
-            # 输出其他关键张量字段的尺寸
-            key_fields = ['intrinsics', 'extrinsics', 'future_egomotion']
-            for key in key_fields:
-                if key in collated:
-                    value = collated[key]
-                    if torch.is_tensor(value):
-                        print(f"  {key}: {value.shape}")
-                    elif isinstance(value, dict):
-                        for sub_key, sub_value in value.items():
-                            if torch.is_tensor(sub_value):
-                                print(f"  {key}[{sub_key}]: {sub_value.shape}")
-        
+                
         return collated
     except Exception as e:
-        print(f"[Warn] DSEC Collate 失败: {e}")
         if filtered_batch:
             print(f"[Debug] Batch keys: {filtered_batch[0].keys() if isinstance(filtered_batch[0], dict) else 'N/A'}")
             # 打印形状信息帮助调试

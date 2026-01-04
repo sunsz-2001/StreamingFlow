@@ -38,13 +38,13 @@ class TrainingModule(pl.LightningModule):
         self.losses_fn = nn.ModuleDict()
 
         # Semantic segmentation
-        self.losses_fn['segmentation'] = SegmentationLoss(
-            class_weights=torch.Tensor(self.cfg.SEMANTIC_SEG.VEHICLE.WEIGHTS),
-            use_top_k=self.cfg.SEMANTIC_SEG.VEHICLE.USE_TOP_K,
-            top_k_ratio=self.cfg.SEMANTIC_SEG.VEHICLE.TOP_K_RATIO,
-            future_discount=self.cfg.FUTURE_DISCOUNT,
-        )
-        self.model.segmentation_weight = nn.Parameter(torch.tensor(0.0), requires_grad=True)
+        # self.losses_fn['segmentation'] = SegmentationLoss(
+        #     class_weights=torch.Tensor(self.cfg.SEMANTIC_SEG.VEHICLE.WEIGHTS),
+        #     use_top_k=self.cfg.SEMANTIC_SEG.VEHICLE.USE_TOP_K,
+        #     top_k_ratio=self.cfg.SEMANTIC_SEG.VEHICLE.TOP_K_RATIO,
+        #     future_discount=self.cfg.FUTURE_DISCOUNT,
+        # )
+        # self.model.segmentation_weight = nn.Parameter(torch.tensor(0.0), requires_grad=True)
         self.metric_vehicle_val = IntersectionOverUnion(self.n_classes)
 
         # Pedestrian segmentation
@@ -157,17 +157,6 @@ class TrainingModule(pl.LightningModule):
                             if isinstance(first_window, dict) and 'flow_lidar' in first_window:
                                 flow_lidar = first_window['flow_lidar']
                                 
-                                # 调试信息：检查 flow_lidar 的结构
-                                if sample_idx == 0:  # 只打印第一个样本的调试信息
-                                    print(f"[DEBUG] flow_lidar type: {type(flow_lidar)}")
-                                    print(f"[DEBUG] flow_lidar length: {len(flow_lidar) if isinstance(flow_lidar, (list, tuple)) else 'N/A'}")
-                                    if isinstance(flow_lidar, (list, tuple)) and len(flow_lidar) > 0:
-                                        print(f"[DEBUG] flow_lidar[0] type: {type(flow_lidar[0])}")
-                                        if hasattr(flow_lidar[0], 'shape'):
-                                            print(f"[DEBUG] flow_lidar[0] shape: {flow_lidar[0].shape}")
-                                        elif isinstance(flow_lidar[0], (list, tuple, np.ndarray)):
-                                            print(f"[DEBUG] flow_lidar[0] length/shape: {len(flow_lidar[0]) if isinstance(flow_lidar[0], (list, tuple)) else flow_lidar[0].shape}")
-                                
                                 if isinstance(flow_lidar, list) and len(flow_lidar) > 0:
                                     # flow_lidar[0] 可能是单个点云，也可能是多个时间步点云的列表
                                     first_lidar = flow_lidar[0]
@@ -201,11 +190,6 @@ class TrainingModule(pl.LightningModule):
                                         
                                         # 将多时间步点云列表添加到 points
                                         points.append(sample_points)  # [[pc_t-2, pc_t-1, pc_t], ...]
-                                        
-                                        # 调试信息（仅第一个样本）
-                                        if sample_idx == 0:
-                                            print(f"[DEBUG] Extracted {len(sample_points)} time steps from flow_lidar[0]")
-                                            print(f"[DEBUG] Sample points shapes: {[pc.shape if hasattr(pc, 'shape') else 'N/A' for pc in sample_points]}")
                                     else:
                                         # 单个点云（TIME_RECEPTIVE_FIELD=1 的情况）
                                         point_cloud = first_lidar
@@ -345,12 +329,12 @@ class TrainingModule(pl.LightningModule):
 
         if is_train:
             # segmentation (only if not using detection task)
-            if 'segmentation' in output and 'segmentation' in labels:
-                segmentation_factor = 1 / (2 * torch.exp(self.model.segmentation_weight))
-                loss['segmentation'] = segmentation_factor * self.losses_fn['segmentation'](
-                    output['segmentation'], labels['segmentation'], self.model.receptive_field
-                )
-                loss['segmentation_uncertainty'] = 0.5 * self.model.segmentation_weight
+            # if 'segmentation' in output and 'segmentation' in labels:
+            #     segmentation_factor = 1 / (2 * torch.exp(self.model.segmentation_weight))
+            #     loss['segmentation'] = segmentation_factor * self.losses_fn['segmentation'](
+            #         output['segmentation'], labels['segmentation'], self.model.receptive_field
+            #     )
+            #     loss['segmentation_uncertainty'] = 0.5 * self.model.segmentation_weight
 
             # Pedestrian (only if segmentation is enabled)
             if 'pedestrian' in output and 'pedestrian' in labels and self.cfg.SEMANTIC_SEG.PEDESTRIAN.ENABLED:
@@ -651,13 +635,8 @@ class TrainingModule(pl.LightningModule):
         return total_loss
 
     def on_after_backward(self):
-        """DIAGNOSIS: 检查 backward 后的梯度状态，定位 NaN 来源"""
         if not hasattr(self, '_first_backward_checked'):
             self._first_backward_checked = True
-            print("=" * 80)
-            print("DIAGNOSIS: First training step - checking gradients AFTER backward...")
-            print("=" * 80)
-            
             # 显示 loss 信息
             if hasattr(self, '_last_loss_dict'):
                 print("  Loss components:")
@@ -709,41 +688,11 @@ class TrainingModule(pl.LightningModule):
                                 'grad_norm': param_grad_norm,
                                 'grad_stats': f"min={grad_min:.6f}, max={grad_max:.6f}, mean={grad_mean:.6f}"
                             })
-                
-                if module_nan_count > 0:
-                    print(f"\n  ERROR: Module '{module_name}' has {module_nan_count}/{module_param_count} parameters with NaN/Inf gradients")
-                    for param_info in nan_grad_modules[module_name][:3]:  # 只显示前3个
-                        print(f"    - {param_info['name']}: NaN={param_info['has_nan']}, Inf={param_info['has_inf']}, norm={param_info['grad_norm']:.6f}")
-                        print(f"      {param_info['grad_stats']}")
-            
-            print(f"\n  Total parameters with gradients: {param_count}")
-            print(f"  Total gradient norm: {total_grad_norm:.6f}")
-            print(f"  Max gradient norm: {max_grad_norm:.6f} (parameter: {max_grad_param_name})")
-            print(f"  Modules with NaN/Inf gradients: {len(nan_grad_modules)}")
             
             if len(nan_grad_modules) > 0:
                 print(f"\n  ERROR: Found NaN/Inf gradients in {len(nan_grad_modules)} modules:")
-                for module_name in list(nan_grad_modules.keys())[:10]:  # 只显示前10个模块
-                    print(f"    - {module_name}: {len(nan_grad_modules[module_name])} parameters")
-                
-                # 尝试推断是哪个 loss 项导致的
-                print(f"\n  Potential loss sources:")
-                if any('detection' in name or 'head' in name or 'decoder' in name for name in nan_grad_modules.keys()):
-                    print(f"    - Detection loss components (detection_loss_heatmap, detection_layer_*_loss_cls, detection_layer_*_loss_bbox)")
-                if any('event_encoder' in name or 'backbone' in name for name in nan_grad_modules.keys()):
-                    print(f"    - Event encoder/backbone (affected by all loss components)")
             else:
                 print(f"  ✓ All gradients are valid")
-            
-            # 检查梯度裁剪配置
-            if hasattr(self.trainer, 'gradient_clip_val') and self.trainer.gradient_clip_val is not None:
-                print(f"\n  Gradient clipping enabled: max_norm={self.trainer.gradient_clip_val}")
-                if total_grad_norm > self.trainer.gradient_clip_val:
-                    print(f"  WARNING: Total gradient norm ({total_grad_norm:.6f}) exceeds clip value!")
-            else:
-                print(f"\n  Gradient clipping: NOT ENABLED")
-            
-            print("=" * 80)
     
 
     def validation_step(self, batch, batch_idx):
@@ -795,9 +744,9 @@ class TrainingModule(pl.LightningModule):
                                                       global_step=self.training_step_count)
                 self.metric_planning_val.reset()
 
-        self.logger.experiment.add_scalar('epoch_segmentation_weight',
-                                          1 / (2 * torch.exp(self.model.segmentation_weight)),
-                                          global_step=self.training_step_count)
+        # self.logger.experiment.add_scalar('epoch_segmentation_weight',
+        #                                   1 / (2 * torch.exp(self.model.segmentation_weight)),
+        #                                   global_step=self.training_step_count)
         if self.cfg.LIFT.GT_DEPTH:
             self.logger.experiment.add_scalar('epoch_depths_weight', 1 / (2 * torch.exp(self.model.depths_weight)),
                                               global_step=self.training_step_count)
