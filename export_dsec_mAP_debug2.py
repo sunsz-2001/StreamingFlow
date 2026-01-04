@@ -262,9 +262,9 @@ def export_and_eval(_cfg_path: str, checkpoint: str, dataroot: str, iou_thr: flo
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="DSEC mAP evaluation")
     parser.add_argument("--config-file", default="/home/user/sunsz/StreamingFlow/streamingflow/configs/dsec_event_lidar.yaml", help="Path to config file. Use dsec_event_lidar.yaml for event+lidar fusion, or dsec_event.yaml for event-only.")
-    parser.add_argument("--checkpoint", default='/home/user/sunsz/StreamingFlow/logs/dsec_event_lidar_eval/epoch=19-step=10499.ckpt', help="Path to model checkpoint (.ckpt).")
+    parser.add_argument("--checkpoint", default='/home/user/sunsz/StreamingFlow/logs/dsec_event_lidar_eval/epoch=34-step=18374.ckpt', help="Path to model checkpoint (.ckpt).")
     parser.add_argument("--dataroot", default='/media/switcher/sda/datasets/dsec/', help="Path to DSEC dataset root.")
-    parser.add_argument("--iou-thr", type=float, default=0.1)
-    parser.add_argument("--score-thr", type=float, default=0.001)
+    parser.add_argument("--iou-thr", type=float, default=0.01)
+    parser.add_argument("--score-thr", type=float, default=0.01)
     args = parser.parse_args()
     export_and_eval(args.config_file, args.checkpoint, args.dataroot, args.iou_thr, args.score_thr)
