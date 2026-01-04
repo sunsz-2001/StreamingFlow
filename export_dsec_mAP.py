@@ -1,6 +1,8 @@
 import argparse
+import os
 from typing import Dict, List, Tuple
 
+import cv2
 import numpy as np
 import torch
 from tqdm import tqdm
@@ -49,16 +51,21 @@ def process_flow_data(batch, cfg):
     return flow_data
 
 
-def gather_batch_outputs(model, batch, device, cfg=None, decode: bool = True) -> Tuple[List, List]:
+def gather_batch_outputs(model, batch, device, cfg=None, decode: bool = True) -> Tuple[List, List, Dict]:
     """Run forward pass and decode predictions."""
-    event = batch.get("event")
+    event = None
+    use_lidar = False
+    use_event = False
     points, lidar_timestamp, intrinsics, extrinsics, camera_timestamps, target_timestamp = None, None, None, None, None, None
 
     if cfg is not None:
-        use_flow_data = getattr(cfg.DATASET, 'USE_FLOW_DATA', False)
-        use_lidar = getattr(cfg.MODEL.MODALITY, 'USE_LIDAR', False)
+        use_flow_data = getattr(cfg.DATASET, 'USE_FLOW_DATA', False)
+        use_lidar = getattr(cfg.MODEL.MODALITY, 'USE_LIDAR', False)
+        use_event = getattr(cfg.MODEL.MODALITY, 'USE_EVENT', False)
 
-        if use_flow_data and 'flow_data' in batch:
+        if use_flow_data:
+            if 'flow_data' not in batch:
+                raise ValueError("USE_FLOW_DATA is True but batch['flow_data'] is missing.")
             flow_data = process_flow_data(batch, cfg)
             intrinsics = flow_data[0]['intrinsics']
             extrinsics = flow_data[0]['extrinsics']
@@ -67,6 +74,9 @@ def gather_batch_outputs(model, batch, device, cfg=None, decode: bool = True) ->
             if use_lidar:
                 points = flow_data[0]['flow_lidar']
                 lidar_timestamp = flow_data[0]['lidar_stmp']
+            event = flow_data[0].get("flow_events")
+            if torch.is_tensor(event) and event.dim() == 5:
+                event = event.unsqueeze(2)  # [B, S, 1, C, H, W]
         else:
             points = batch.get("points")
             lidar_timestamp = batch.get("lidar_timestamp")
@@ -74,6 +84,7 @@ def gather_batch_outputs(model, batch, device, cfg=None, decode: bool = True) ->
             extrinsics = batch.get("extrinsics")
             camera_timestamps = batch.get("camera_timestamp")
             target_timestamp = batch.get("target_timestamp")
+            event = batch.get("event")
     else:
         points = batch.get("points")
         lidar_timestamp = batch.get("lidar_timestamp")
@@ -81,15 +92,24 @@ def gather_batch_outputs(model, batch, device, cfg=None, decode: bool = True) ->
         extrinsics = batch.get("extrinsics")
         camera_timestamps = batch.get("camera_timestamp")
         target_timestamp = batch.get("target_timestamp")
+        event = batch.get("event")
 
-    if intrinsics is None:
-        intrinsics = batch.get("intrinsics")
-    if extrinsics is None:
-        extrinsics = batch.get("extrinsics")
-    if camera_timestamps is None:
-        camera_timestamps = batch.get("camera_timestamp")
-    if target_timestamp is None:
-        target_timestamp = batch.get("target_timestamp")
+    if intrinsics is None or extrinsics is None or camera_timestamps is None or target_timestamp is None:
+        raise ValueError("Missing required camera metadata (intrinsics/extrinsics/timestamps) for gather_batch_outputs.")
+    if use_lidar and (points is None or lidar_timestamp is None):
+        raise ValueError("USE_LIDAR is True but points/lidar_timestamp is missing in batch.")
+    if use_event and event is None:
+        raise ValueError("USE_EVENT is True but event input is missing in batch.")
+
+    def to_device_event(event, device):
+        if event is None:
+            return None
+        if torch.is_tensor(event):
+            return event.float().to(device)
+        if isinstance(event, dict) and "frames" in event and torch.is_tensor(event["frames"]):
+            event = dict(event)
+            event["frames"] = event["frames"].float().to(device)
+        return event
 
     def to_device_tensor(data, device):
         if data is None:
@@ -105,6 +125,7 @@ def gather_batch_outputs(model, batch, device, cfg=None, decode: bool = True) ->
     camera_timestamps = to_device_tensor(camera_timestamps, device)
     target_timestamp = to_device_tensor(target_timestamp, device)
     lidar_timestamp = to_device_tensor(lidar_timestamp, device)
+    event = to_device_event(event, device)
 
     output = model(
         batch.get("image"), intrinsics, extrinsics, batch.get("future_egomotion"),
@@ -113,7 +134,7 @@ def gather_batch_outputs(model, batch, device, cfg=None, decode: bool = True) ->
     )
 
     if not decode:
-        return [], []
+        return [], [], output
 
     decoded = model.decoder.detection_head.get_bboxes(output["detection"], batch["metas"])
     preds = []
@@ -124,7 +145,7 @@ def gather_batch_outputs(model, batch, device, cfg=None, decode: bool = True) ->
     gts = []
     for gt_boxes, gt_labels in zip(batch["gt_bboxes_3d"], batch["gt_labels_3d"]):
         gts.append((gt_boxes.tensor.cpu(), gt_labels.cpu()))
-    return preds, gts
+    return preds, gts, output
 
 
 def compute_ap_per_class(preds, gts, num_classes: int, iou_thr: float) -> Dict[str, float]:
@@ -177,7 +198,51 @@ def compute_ap_per_class(preds, gts, num_classes: int, iou_thr: float) -> Dict[s
     return ap_results
 
 
-def export_and_eval(_cfg_path: str, checkpoint: str, dataroot: str, iou_thr: float, score_thr: float = 0.0):
+def save_dsec_visualization(batch, output, preds, gts, idx, save_dir, cfg):
+    from streamingflow.utils.visualisation import (
+        plot_event_frame, plot_lidar_bev, plot_boxes_bev, plot_bev_feature
+    )
+
+    os.makedirs(save_dir, exist_ok=True)
+    bev_range = (cfg.LIFT.X_BOUND[0], cfg.LIFT.X_BOUND[1],
+                 cfg.LIFT.Y_BOUND[0], cfg.LIFT.Y_BOUND[1])
+    resolution = cfg.LIFT.X_BOUND[2]
+
+    # 提取数据
+    flow_data = batch['flow_data'][0][0]
+    events = flow_data['flow_events'][-1].cpu().numpy()
+    points = flow_data['flow_lidar'][-1].cpu().numpy()
+
+    # 6个子�?
+    event_img = plot_event_frame(events)
+    lidar_img = plot_lidar_bev(points, bev_range, resolution)
+    event_bev_img = plot_bev_feature(output['event_bev'][0, -1].cpu().numpy())
+    lidar_bev_img = plot_bev_feature(output['lidar_states'][0, -1].cpu().numpy())
+
+    pred_boxes = preds[0][0].numpy()
+    gt_boxes = gts[0][0].numpy()
+    pred_img = plot_boxes_bev(pred_boxes, bev_range, resolution, (0, 255, 0))
+    gt_img = plot_boxes_bev(gt_boxes, bev_range, resolution, (255, 0, 0))
+
+    # 调整尺寸一�?
+    target_h, target_w = event_img.shape[:2]
+    lidar_img = cv2.resize(lidar_img, (target_w, target_h))
+    event_bev_img = cv2.resize(event_bev_img, (target_w, target_h))
+    lidar_bev_img = cv2.resize(lidar_bev_img, (target_w, target_h))
+    pred_img = cv2.resize(pred_img, (target_w, target_h))
+    gt_img = cv2.resize(gt_img, (target_w, target_h))
+
+    # 拼接: 2�?�?
+    row1 = np.concatenate([event_img, lidar_img, event_bev_img], axis=1)
+    row2 = np.concatenate([lidar_bev_img, pred_img, gt_img], axis=1)
+    result = np.concatenate([row1, row2], axis=0)
+
+    cv2.imwrite(f"{save_dir}/{idx:04d}.png", cv2.cvtColor(result, cv2.COLOR_RGB2BGR))
+
+
+def export_and_eval(_cfg_path: str, checkpoint: str, dataroot: str, iou_thr: float,
+                    score_thr: float = 0.0, visualize: bool = False,
+                    vis_interval: int = 10, vis_save_path: str = "dsec_visualize"):
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     parser = get_parser()
@@ -226,7 +291,11 @@ def export_and_eval(_cfg_path: str, checkpoint: str, dataroot: str, iou_thr: flo
     for batch_idx, batch in enumerate(tqdm(valloader, desc="Evaluating")):
         batch = to_device(batch, device)
         with torch.no_grad():
-            preds, gts = gather_batch_outputs(trainer.model, batch, device, cfg=cfg)
+            preds, gts, output = gather_batch_outputs(trainer.model, batch, device, cfg=cfg)
+
+        # 可视�?
+        if visualize and batch_idx % vis_interval == 0:
+            save_dsec_visualization(batch, output, preds, gts, batch_idx, vis_save_path, cfg)
 
         for idx, (pred, gt) in enumerate(zip(preds, gts)):
             seq_name = batch.get('sequence_name', ['unknown'])[idx] if 'sequence_name' in batch else f'seq_{idx}'
@@ -266,5 +335,16 @@ if __name__ == "__main__":
     parser.add_argument("--dataroot", required=True)
     parser.add_argument("--iou-thr", type=float, default=0.5)
     parser.add_argument("--score-thr", type=float, default=0.0)
+    parser.add_argument("--visualize", action="store_true", help="Enable visualization")
+    parser.add_argument("--vis-interval", type=int, default=10, help="Visualize every N batches")
+    parser.add_argument("--vis-save-path", default="dsec_visualize", help="Save directory")
     args = parser.parse_args()
-    export_and_eval(args.config_file, args.checkpoint, args.dataroot, args.iou_thr, args.score_thr)
+    export_and_eval(args.config_file, args.checkpoint, args.dataroot, args.iou_thr,
+                    args.score_thr, args.visualize, args.vis_interval, args.vis_save_path)
+
+
+
+
+
+
+

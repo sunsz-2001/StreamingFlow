@@ -881,6 +881,11 @@ class streamingflow(nn.Module):
 
         output = {**output, **bev_output}
 
+        # 输出BEV中间特征用于可视化
+        output["event_bev"] = event_data["bev"] if event_data is not None else None
+        output["lidar_states"] = lidar_states
+        output["camera_states"] = camera_states
+
         return output
 
     def get_geometry(self, intrinsics, extrinsics):
