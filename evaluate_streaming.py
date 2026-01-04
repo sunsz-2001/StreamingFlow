@@ -32,7 +32,7 @@ def eval(checkpoint_path, continuous=False, dataroot=None,  n_future_frames=4, e
         save_path = mk_save_dir()
 
     trainer = TrainingModule.load_from_checkpoint(checkpoint_path, strict=False)
-    print(f'Loaded weights from \n {checkpoint_path}')
+    # print(f'Loaded weights from \n {checkpoint_path}')
     trainer.eval()
 
     device = torch.device('cuda:0')
@@ -226,8 +226,8 @@ def eval(checkpoint_path, continuous=False, dataroot=None,  n_future_frames=4, e
             for key, value in scores.items():
                 results['plan_'+key+'_{}s'.format(i+1)]=value.mean()
 
-    for key, value in results.items():
-        print(f'{key} : {value.item()}')
+    # for key, value in results.items():
+    #     print(f'{key} : {value.item()}')
 
 
 def plot_prediction(batch, labels, image, output, consistent_instance_seg,index_t,frame,save_path,cfg):

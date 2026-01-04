@@ -1,6 +1,6 @@
 import os
-os.environ['TORCH_DISTRIBUTED_DEBUG'] = 'DETAIL'
-os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+# os.environ['TORCH_DISTRIBUTED_DEBUG'] = 'DETAIL'
+# os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 import time
 import socket
 import torch
@@ -137,7 +137,8 @@ def main():
     num_gpus = len(cfg.GPUS) if isinstance(cfg.GPUS, list) else 1
     if num_gpus > 1:
         accelerator = 'ddp'
-        plugins = DDPPlugin(find_unused_parameters=False)
+        plugins = DDPPlugin(find_unused_parameters=True)
+        # plugins = DDPPlugin(find_unused_parameters=False)
     else:
         accelerator = None
         plugins = None
@@ -146,7 +147,8 @@ def main():
         gpus=cfg.GPUS,
         accelerator=accelerator,
         precision=cfg.PRECISION,
-        sync_batchnorm=True if num_gpus > 1 else False,
+        sync_batchnorm=False,
+        # sync_batchnorm=True if num_gpus > 1 else False,
         gradient_clip_val=cfg.GRAD_NORM_CLIP,
         max_epochs=cfg.EPOCHS,
         weights_summary='full',

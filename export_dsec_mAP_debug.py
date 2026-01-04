@@ -287,6 +287,7 @@ def export_and_eval(_cfg_path: str, checkpoint: str, dataroot: str, iou_thr: flo
         batch = to_device(batch, device)
         with torch.no_grad():
             preds, gts = gather_batch_outputs(trainer.model, batch, device, cfg=cfg)
+            pass
         for idx, (pred, gt) in enumerate(zip(preds, gts)):
             # 生成样本ID：使用 sequence_name 和 frame_id（如果存在）
             seq_name = batch.get('sequence_name', ['unknown'])[idx] if 'sequence_name' in batch else f'seq_{idx}'
@@ -336,7 +337,7 @@ def export_and_eval(_cfg_path: str, checkpoint: str, dataroot: str, iou_thr: flo
 def parse_args():
     parser = argparse.ArgumentParser(description="Export DSEC detection predictions and compute mAP (IoU-based).")
     parser.add_argument("--config-file", default="/home/user/sunsz/StreamingFlow/streamingflow/configs/dsec_event_lidar.yaml", help="Path to config file. Use dsec_event_lidar.yaml for event+lidar fusion, or dsec_event.yaml for event-only.")
-    parser.add_argument("--checkpoint", default='/home/user/sunsz/StreamingFlow/logs/dsec_event_lidar_eval/epoch=29-step=62999.ckpt', help="Path to model checkpoint (.ckpt).")
+    parser.add_argument("--checkpoint", default='/home/user/sunsz/StreamingFlow/logs/dsec_event_lidar_eval/epoch=19-step=10499.ckpt', help="Path to model checkpoint (.ckpt).")
     parser.add_argument("--dataroot", default='/media/switcher/sda/datasets/dsec/', help="Path to DSEC dataset root.")
     parser.add_argument("--iou-thr", type=float, default=0.1, help="IoU threshold for AP.")
     parser.add_argument("--score-thr", type=float, default=0.0, help="Score threshold for filtering predictions (0.0 means no filtering).")

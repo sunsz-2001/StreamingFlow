@@ -1,9 +1,9 @@
 TAG: 'dsec_event_lidar_eval'  # 训练日志和检查点保存目录名（与 event-only 区分）
 
-GPUS: [2,3]
+GPUS: [0,1,2,3]
 BATCHSIZE: 2
 PRECISION: 32  # 16 或 32，混合精度训练使用 16
-EPOCHS: 10  # 训练轮数
+EPOCHS: 50  # 训练轮数
 
 N_WORKERS: 8  # 数据加载器工作进程数
 # LOG_DIR: 'logs'  # 日志保存目录（默认：'logs'）
@@ -47,7 +47,7 @@ DATASET:
   EVENT_CAMERAS: ['camera_0']
   VERSION: 'trainval'
 
-TIME_RECEPTIVE_FIELD: 6  # 时间感受野（过去帧数），1 表示只使用当前帧
+TIME_RECEPTIVE_FIELD: 5  # 时间感受野（过去帧数），1 表示只使用当前帧
 N_FUTURE_FRAMES: 1  # 未来预测帧数
 # 【重要】启用异步融合需要设置 N_FUTURE_FRAMES > 0
 # - N_FUTURE_FRAMES > 0: 启用未来预测和异步融合，FuturePredictionODE 会处理异步对齐
@@ -152,7 +152,7 @@ DETECTION:
   DATASET: 'dsec'
 
 OPTIMIZER:
-  LR: 1e-4
+  LR: 2e-4
   WEIGHT_DECAY: 1e-7
 
 PRETRAINED:

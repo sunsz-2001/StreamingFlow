@@ -32,10 +32,10 @@ def get_latest_checkpoint(folder_path):
                 max_epoch = epoch
                 max_file_path = file_path
 
-    if max_file_path:
-        print(f"The path to the .ckpt file with the highest epoch number is: {max_file_path}")
-    else:
-        print("No .ckpt files with the naming convention epoch_{}* were found.")
+    # if max_file_path:
+    #     print(f"The path to the .ckpt file with the highest epoch number is: {max_file_path}")
+    # else:
+    #     print("No .ckpt files with the naming convention epoch_{}* were found.")
     
     return max_file_path
 
@@ -75,11 +75,11 @@ def main():
             filtered_state[k] = v
 
         missing_keys, unexpected_keys = model.load_state_dict(filtered_state, strict=False)
-        print(f"Loaded pretrained weights from {cfg.PRETRAINED.PATH}")
-        if missing_keys:
-            print(f"Missing keys (not loaded, kept init): {len(missing_keys)}")
-        if unexpected_keys:
-            print(f"Unexpected keys in checkpoint (ignored): {len(unexpected_keys)}")
+        # print(f"Loaded pretrained weights from {cfg.PRETRAINED.PATH}")
+        # if missing_keys:
+        #     print(f"Missing keys (not loaded, kept init): {len(missing_keys)}")
+        # if unexpected_keys:
+        #     print(f"Unexpected keys in checkpoint (ignored): {len(unexpected_keys)}")
 
     save_dir = os.path.join(
         cfg.LOG_DIR, cfg.TAG
@@ -100,13 +100,13 @@ def main():
     # 检查 checkpoint 是否存在且有效
     if latest_ckpt is not None:
         if not os.path.exists(latest_ckpt):
-            print(f"WARNING: Checkpoint file not found: {latest_ckpt}")
-            print("Starting training from scratch (no checkpoint resume).")
+            # print(f"WARNING: Checkpoint file not found: {latest_ckpt}")
+            # print("Starting training from scratch (no checkpoint resume).")
             latest_ckpt = None
         else:
             # 尝试加载 checkpoint 并检查是否包含 NaN 权重
             try:
-                print(f"Checking checkpoint file: {latest_ckpt}")
+                # print(f"Checking checkpoint file: {latest_ckpt}")
                 ckpt = torch.load(latest_ckpt, map_location='cpu')
                 if 'state_dict' in ckpt:
                     state_dict = ckpt['state_dict']
@@ -114,20 +114,20 @@ def main():
                     for key, value in state_dict.items():
                         if isinstance(value, torch.Tensor):
                             if torch.isnan(value).any() or torch.isinf(value).any():
-                                print(f"WARNING: NaN/Inf found in checkpoint parameter: {key}")
+                                # print(f"WARNING: NaN/Inf found in checkpoint parameter: {key}")
                                 has_nan_in_ckpt = True
                     if has_nan_in_ckpt:
-                        print("WARNING: Checkpoint contains NaN/Inf weights! Will not resume from this checkpoint.")
-                        print("Starting training from scratch.")
+                        # print("WARNING: Checkpoint contains NaN/Inf weights! Will not resume from this checkpoint.")
+                        # print("Starting training from scratch.")
                         latest_ckpt = None
                     else:
-                        print(f"Checkpoint validation passed: {latest_ckpt}")
+                        # print(f"Checkpoint validation passed: {latest_ckpt}")
                 else:
-                    print(f"WARNING: Checkpoint file does not contain 'state_dict' key. Will not resume.")
+                    # print(f"WARNING: Checkpoint file does not contain 'state_dict' key. Will not resume.")
                     latest_ckpt = None
             except Exception as e:
-                print(f"WARNING: Failed to load checkpoint file: {e}")
-                print("Starting training from scratch.")
+                # print(f"WARNING: Failed to load checkpoint file: {e}")
+                # print("Starting training from scratch.")
                 latest_ckpt = None
     else:
         print("No checkpoint found. Starting training from scratch.")

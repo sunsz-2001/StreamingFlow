@@ -316,13 +316,13 @@ class streamingflow(nn.Module):
                 f, c = ret
                 n = None
 
-            if k == 0 and c.numel() > 0:
-                if c.shape[1] >= 3:
-                    print(f"    Dim 0: [{c[:, 0].min().item()}, {c[:, 0].max().item()}]")
-                    print(f"    Dim 1: [{c[:, 1].min().item()}, {c[:, 1].max().item()}]")
-                    print(f"    Dim 2: [{c[:, 2].min().item()}, {c[:, 2].max().item()}]")
-                if n is not None:
-                    print(f"  Num points per voxel: min={n.min().item()}, max={n.max().item()}, mean={n.float().mean().item():.2f}")
+            # if k == 0 and c.numel() > 0:
+                # if c.shape[1] >= 3:
+                #     print(f"    Dim 0: [{c[:, 0].min().item()}, {c[:, 0].max().item()}]")
+                #     print(f"    Dim 1: [{c[:, 1].min().item()}, {c[:, 1].max().item()}]")
+                #     print(f"    Dim 2: [{c[:, 2].min().item()}, {c[:, 2].max().item()}]")
+                # if n is not None:
+                #     print(f"  Num points per voxel: min={n.min().item()}, max={n.max().item()}, mean={n.float().mean().item():.2f}")
 
             feats.append(f)
             padded_c = F.pad(c, (1, 0), mode="constant", value=k)
@@ -332,7 +332,7 @@ class streamingflow(nn.Module):
                 sizes.append(n)
 
         if len(feats) == 0:
-            print("[WARNING] No valid voxels generated from any point cloud!")
+            # print("[WARNING] No valid voxels generated from any point cloud!")
             return torch.empty((0, 0), device=points[0].device if len(points) > 0 else torch.device('cuda')), \
                    torch.empty((0, 4), dtype=torch.int32, device=points[0].device if len(points) > 0 else torch.device('cuda')), \
                    torch.empty((0,), dtype=torch.int32, device=points[0].device if len(points) > 0 else torch.device('cuda'))
@@ -341,24 +341,24 @@ class streamingflow(nn.Module):
         coords = torch.cat(coords, dim=0)
 
         sparse_shape = self.encoders["lidar"]["backbone"].sparse_shape
-        if coords.shape[1] >= 4:
-            coord1_max = coords[:, 1].max().item()
-            coord2_max = coords[:, 2].max().item()
-            coord3_max = coords[:, 3].max().item()
+        # if coords.shape[1] >= 4:
+        #     coord1_max = coords[:, 1].max().item()
+        #     coord2_max = coords[:, 2].max().item()
+        #     coord3_max = coords[:, 3].max().item()
 
-            if coord1_max >= sparse_shape[2]:
-                print(f"[ERROR] Coord dim 1 ({coord1_max}) >= sparse_shape[2] ({sparse_shape[2]}) - X axis overflow!")
-            if coord2_max >= sparse_shape[1]:
-                print(f"[ERROR] Coord dim 2 ({coord2_max}) >= sparse_shape[1] ({sparse_shape[1]}) - Y axis overflow!")
-            if coord3_max >= sparse_shape[0]:
-                print(f"[ERROR] Coord dim 3 ({coord3_max}) >= sparse_shape[0] ({sparse_shape[0]}) - Z axis overflow!")
+            # if coord1_max >= sparse_shape[2]:
+            #     print(f"[ERROR] Coord dim 1 ({coord1_max}) >= sparse_shape[2] ({sparse_shape[2]}) - X axis overflow!")
+            # if coord2_max >= sparse_shape[1]:
+            #     print(f"[ERROR] Coord dim 2 ({coord2_max}) >= sparse_shape[1] ({sparse_shape[1]}) - Y axis overflow!")
+            # if coord3_max >= sparse_shape[0]:
+            #     print(f"[ERROR] Coord dim 3 ({coord3_max}) >= sparse_shape[0] ({sparse_shape[0]}) - Z axis overflow!")
 
-            if coord1_max >= sparse_shape[0]:
-                print(f"[ERROR] Coord dim 1 ({coord1_max}) >= sparse_shape[0] ({sparse_shape[0]}) - Z axis overflow (if format is [b,z,y,x])!")
-            if coord2_max >= sparse_shape[1]:
-                print(f"[ERROR] Coord dim 2 ({coord2_max}) >= sparse_shape[1] ({sparse_shape[1]}) - Y axis overflow (if format is [b,z,y,x])!")
-            if coord3_max >= sparse_shape[2]:
-                print(f"[ERROR] Coord dim 3 ({coord3_max}) >= sparse_shape[2] ({sparse_shape[2]}) - X axis overflow (if format is [b,z,y,x])!")
+            # if coord1_max >= sparse_shape[0]:
+            #     print(f"[ERROR] Coord dim 1 ({coord1_max}) >= sparse_shape[0] ({sparse_shape[0]}) - Z axis overflow (if format is [b,z,y,x])!")
+            # if coord2_max >= sparse_shape[1]:
+            #     print(f"[ERROR] Coord dim 2 ({coord2_max}) >= sparse_shape[1] ({sparse_shape[1]}) - Y axis overflow (if format is [b,z,y,x])!")
+            # if coord3_max >= sparse_shape[2]:
+            #     print(f"[ERROR] Coord dim 3 ({coord3_max}) >= sparse_shape[2] ({sparse_shape[2]}) - X axis overflow (if format is [b,z,y,x])!")
 
         if len(sizes) > 0:
             sizes = torch.cat(sizes, dim=0)
@@ -372,7 +372,7 @@ class streamingflow(nn.Module):
         feats, coords, sizes = self.voxelize(x)
 
         if coords.numel() == 0:
-            print("[WARNING] Empty coords, returning empty tensor")
+            # print("[WARNING] Empty coords, returning empty tensor")
             return torch.zeros((0, self.encoders["lidar"]["backbone"].out_channels),
                              device=feats.device, dtype=feats.dtype)
 
@@ -382,28 +382,28 @@ class streamingflow(nn.Module):
         coords = coords.contiguous()
         # coords = coords[:, [0, 3, 2, 1]].contiguous()
 
-        if coords.shape[1] >= 4:
-            z_coords = coords[:, 1]
-            y_coords = coords[:, 2]
-            x_coords = coords[:, 3]
-            sparse_shape = self.encoders['lidar']['backbone'].sparse_shape
-            if z_coords.max().item() >= sparse_shape[0]:
-                print(f"[ERROR] Z coordinate overflow: {z_coords.max().item()} >= {sparse_shape[0]}")
-            if y_coords.max().item() >= sparse_shape[1]:
-                print(f"[ERROR] Y coordinate overflow: {y_coords.max().item()} >= {sparse_shape[1]}")
-            if x_coords.max().item() >= sparse_shape[2]:
-                print(f"[ERROR] X coordinate overflow: {x_coords.max().item()} >= {sparse_shape[2]}")
+        # if coords.shape[1] >= 4:
+        #     z_coords = coords[:, 1]
+        #     y_coords = coords[:, 2]
+        #     x_coords = coords[:, 3]
+        #     sparse_shape = self.encoders['lidar']['backbone'].sparse_shape
+        #     if z_coords.max().item() >= sparse_shape[0]:
+        #         print(f"[ERROR] Z coordinate overflow: {z_coords.max().item()} >= {sparse_shape[0]}")
+        #     if y_coords.max().item() >= sparse_shape[1]:
+        #         print(f"[ERROR] Y coordinate overflow: {y_coords.max().item()} >= {sparse_shape[1]}")
+        #     if x_coords.max().item() >= sparse_shape[2]:
+        #         print(f"[ERROR] X coordinate overflow: {x_coords.max().item()} >= {sparse_shape[2]}")
 
         try:
             x = self.encoders["lidar"]["backbone"](feats, coords, batch_size, sizes=sizes)
             return x
         except RuntimeError as e:
-            if coords.numel() > 0:
-                print(f"  Coords sample (first 10):")
-                try:
-                    print(f"    {coords[:min(10, len(coords))].cpu().numpy()}")
-                except:
-                    print(f"    (Unable to print coords due to CUDA error)")
+            # if coords.numel() > 0:
+            #     print(f"  Coords sample (first 10):")
+            #     try:
+            #         print(f"    {coords[:min(10, len(coords))].cpu().numpy()}")
+            #     except:
+            #         print(f"    (Unable to print coords due to CUDA error)")
             raise
 
     def extract_lidar_features_time_series(self, points, T=None):
@@ -669,10 +669,10 @@ class streamingflow(nn.Module):
 
             # Check bev_sequence for NaN/Inf after event fusion
             if torch.isnan(bev_sequence).any() or torch.isinf(bev_sequence).any():
-                print(f"Warning: NaN/Inf in bev_sequence after event fusion")
-                print(f"  bev_sequence stats: min={bev_sequence.min()}, max={bev_sequence.max()}, mean={bev_sequence.mean()}")
-                if "event" in output and "bev" in output["event"]:
-                    print(f"  event_data['bev'] stats: min={event_data['bev'].min()}, max={event_data['bev'].max()}, mean={event_data['bev'].mean()}")
+                # print(f"Warning: NaN/Inf in bev_sequence after event fusion")
+                # print(f"  bev_sequence stats: min={bev_sequence.min()}, max={bev_sequence.max()}, mean={bev_sequence.mean()}")
+                # if "event" in output and "bev" in output["event"]:
+                #     print(f"  event_data['bev'] stats: min={event_data['bev'].min()}, max={event_data['bev'].max()}, mean={event_data['bev'].mean()}")
                 # Replace NaN/Inf with 0
                 bev_sequence = torch.where(
                     torch.isnan(bev_sequence) | torch.isinf(bev_sequence),

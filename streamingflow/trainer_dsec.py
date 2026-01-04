@@ -38,14 +38,14 @@ class TrainingModule(pl.LightningModule):
 
         self.losses_fn = nn.ModuleDict()
 
-        # Semantic segmentation
-        self.losses_fn['segmentation'] = SegmentationLoss(
-            class_weights=torch.Tensor(self.cfg.SEMANTIC_SEG.VEHICLE.WEIGHTS),
-            use_top_k=self.cfg.SEMANTIC_SEG.VEHICLE.USE_TOP_K,
-            top_k_ratio=self.cfg.SEMANTIC_SEG.VEHICLE.TOP_K_RATIO,
-            future_discount=self.cfg.FUTURE_DISCOUNT,
-        )
-        self.model.segmentation_weight = nn.Parameter(torch.tensor(0.0), requires_grad=True)
+        # # Semantic segmentation
+        # self.losses_fn['segmentation'] = SegmentationLoss(
+        #     class_weights=torch.Tensor(self.cfg.SEMANTIC_SEG.VEHICLE.WEIGHTS),
+        #     use_top_k=self.cfg.SEMANTIC_SEG.VEHICLE.USE_TOP_K,
+        #     top_k_ratio=self.cfg.SEMANTIC_SEG.VEHICLE.TOP_K_RATIO,
+        #     future_discount=self.cfg.FUTURE_DISCOUNT,
+        # )
+        # self.model.segmentation_weight = nn.Parameter(torch.tensor(0.0), requires_grad=True)
         self.metric_vehicle_val = IntersectionOverUnion(self.n_classes)
 
         # Pedestrian segmentation
@@ -290,7 +290,7 @@ class TrainingModule(pl.LightningModule):
                 # Check for NaN in detection losses
                 for key, val in detection_losses.items():
                     if torch.isnan(val).any() or torch.isinf(val).any():
-                        print(f"Warning: NaN/Inf detected in detection_losses['{key}']: {val}")
+                        # print(f"Warning: NaN/Inf detected in detection_losses['{key}']: {val}")
                         # Replace NaN/Inf with 0 to prevent propagation
                         detection_losses[key] = torch.where(
                             torch.isnan(val) | torch.isinf(val),
@@ -537,12 +537,8 @@ class TrainingModule(pl.LightningModule):
         return total_loss
 
     def on_after_backward(self):
-        """DIAGNOSIS: 检查 backward 后的梯度状态，定位 NaN 来源"""
         if not hasattr(self, '_first_backward_checked'):
             self._first_backward_checked = True
-            print("=" * 80)
-            print("DIAGNOSIS: First training step - checking gradients AFTER backward...")
-            print("=" * 80)
             
             # 显示 loss 信息
             if hasattr(self, '_last_loss_dict'):
@@ -598,38 +594,6 @@ class TrainingModule(pl.LightningModule):
                 
                 if module_nan_count > 0:
                     print(f"\n  ERROR: Module '{module_name}' has {module_nan_count}/{module_param_count} parameters with NaN/Inf gradients")
-                    for param_info in nan_grad_modules[module_name][:3]:  # 只显示前3个
-                        print(f"    - {param_info['name']}: NaN={param_info['has_nan']}, Inf={param_info['has_inf']}, norm={param_info['grad_norm']:.6f}")
-                        print(f"      {param_info['grad_stats']}")
-            
-            print(f"\n  Total parameters with gradients: {param_count}")
-            print(f"  Total gradient norm: {total_grad_norm:.6f}")
-            print(f"  Max gradient norm: {max_grad_norm:.6f} (parameter: {max_grad_param_name})")
-            print(f"  Modules with NaN/Inf gradients: {len(nan_grad_modules)}")
-            
-            if len(nan_grad_modules) > 0:
-                print(f"\n  ERROR: Found NaN/Inf gradients in {len(nan_grad_modules)} modules:")
-                for module_name in list(nan_grad_modules.keys())[:10]:  # 只显示前10个模块
-                    print(f"    - {module_name}: {len(nan_grad_modules[module_name])} parameters")
-                
-                # 尝试推断是哪个 loss 项导致的
-                print(f"\n  Potential loss sources:")
-                if any('detection' in name or 'head' in name or 'decoder' in name for name in nan_grad_modules.keys()):
-                    print(f"    - Detection loss components (detection_loss_heatmap, detection_layer_*_loss_cls, detection_layer_*_loss_bbox)")
-                if any('event_encoder' in name or 'backbone' in name for name in nan_grad_modules.keys()):
-                    print(f"    - Event encoder/backbone (affected by all loss components)")
-            else:
-                print(f"  ✓ All gradients are valid")
-            
-            # 检查梯度裁剪配置
-            if hasattr(self.trainer, 'gradient_clip_val') and self.trainer.gradient_clip_val is not None:
-                print(f"\n  Gradient clipping enabled: max_norm={self.trainer.gradient_clip_val}")
-                if total_grad_norm > self.trainer.gradient_clip_val:
-                    print(f"  WARNING: Total gradient norm ({total_grad_norm:.6f}) exceeds clip value!")
-            else:
-                print(f"\n  Gradient clipping: NOT ENABLED")
-            
-            print("=" * 80)
     
 
     def validation_step(self, batch, batch_idx):
@@ -648,7 +612,7 @@ class TrainingModule(pl.LightningModule):
     def shared_epoch_end(self, step_outputs, is_train):
         if not is_train:
             scores = self.metric_vehicle_val.compute()
-            print(scores)
+            # print(scores)
             self.logger.experiment.add_scalar('epoch_val_all_seg_iou_dynamic', scores[1],
                                               global_step=self.training_step_count)
             self.metric_vehicle_val.reset()
@@ -668,7 +632,7 @@ class TrainingModule(pl.LightningModule):
 
             if self.cfg.INSTANCE_SEG.ENABLED:
                 scores = self.metric_panoptic_val.compute()
-                print(scores)
+                # print(scores)
                 for key, value in scores.items():
                     self.logger.experiment.add_scalar(f'epoch_val_all_ins_{key}_vehicle', value[1].item(),
                                                       global_step=self.training_step_count)
@@ -681,9 +645,9 @@ class TrainingModule(pl.LightningModule):
                                                       global_step=self.training_step_count)
                 self.metric_planning_val.reset()
 
-        self.logger.experiment.add_scalar('epoch_segmentation_weight',
-                                          1 / (2 * torch.exp(self.model.segmentation_weight)),
-                                          global_step=self.training_step_count)
+        # self.logger.experiment.add_scalar('epoch_segmentation_weight',
+        #                                   1 / (2 * torch.exp(self.model.segmentation_weight)),
+        #                                   global_step=self.training_step_count)
         if self.cfg.LIFT.GT_DEPTH:
             self.logger.experiment.add_scalar('epoch_depths_weight', 1 / (2 * torch.exp(self.model.depths_weight)),
                                               global_step=self.training_step_count)
