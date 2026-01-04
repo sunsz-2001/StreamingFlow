@@ -210,8 +210,27 @@ def save_dsec_visualization(batch, output, preds, gts, idx, save_dir, cfg):
 
     # 提取数据
     flow_data = batch['flow_data'][0][0]
-    events = flow_data['flow_events'][-1].cpu().numpy()
-    points = flow_data['flow_lidar'][-1].cpu().numpy()
+
+    def _last_item(value):
+        if isinstance(value, (list, tuple)) and len(value) > 0:
+            return _last_item(value[-1])
+        return value
+
+    events = _last_item(flow_data.get('flow_events'))
+    if torch.is_tensor(events):
+        events = events.cpu().numpy()
+    elif isinstance(events, np.ndarray):
+        events = events
+    else:
+        raise TypeError(f"Unexpected flow_events type: {type(events)}")
+
+    points = _last_item(flow_data.get('flow_lidar'))
+    if torch.is_tensor(points):
+        points = points.cpu().numpy()
+    elif isinstance(points, np.ndarray):
+        points = points
+    else:
+        raise TypeError(f"Unexpected flow_lidar type: {type(points)}")
 
     # 6个子�?
     event_img = plot_event_frame(events)
