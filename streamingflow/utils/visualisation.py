@@ -471,7 +471,8 @@ def plot_event_frame(event_grid: np.ndarray) -> np.ndarray:
     pos = event_grid[:C//2].sum(axis=0)  # 正事件
     neg = event_grid[C//2:].sum(axis=0)  # 负事件
 
-    img = np.ones((H, W, 3), dtype=np.uint8) * 255
+    # Use a black background so positive/negative events stand out.
+    img = np.zeros((H, W, 3), dtype=np.uint8)
     pos_norm = _normalise(pos)
     neg_norm = _normalise(neg)
     img[..., 0] = (pos_norm * 255).astype(np.uint8)  # R

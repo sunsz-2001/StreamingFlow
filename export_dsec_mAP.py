@@ -53,14 +53,19 @@ def process_flow_data(batch, cfg):
 
 def gather_batch_outputs(model, batch, device, cfg=None, decode: bool = True) -> Tuple[List, List, Dict]:
     """Run forward pass and decode predictions."""
-    event = None
-    use_lidar = False
-    use_event = False
+    event = None
+
+    use_lidar = False
+
+    use_event = False
+
     points, lidar_timestamp, intrinsics, extrinsics, camera_timestamps, target_timestamp = None, None, None, None, None, None
 
     if cfg is not None:
-        use_flow_data = getattr(cfg.DATASET, 'USE_FLOW_DATA', False)
-        use_lidar = getattr(cfg.MODEL.MODALITY, 'USE_LIDAR', False)
+        use_flow_data = getattr(cfg.DATASET, 'USE_FLOW_DATA', False)
+
+        use_lidar = getattr(cfg.MODEL.MODALITY, 'USE_LIDAR', False)
+
         use_event = getattr(cfg.MODEL.MODALITY, 'USE_EVENT', False)
 
         if use_flow_data:
@@ -232,7 +237,6 @@ def save_dsec_visualization(batch, output, preds, gts, idx, save_dir, cfg):
     else:
         raise TypeError(f"Unexpected flow_lidar type: {type(points)}")
 
-    # 6个子�?
     event_img = plot_event_frame(events)
     lidar_img = plot_lidar_bev(points, bev_range, resolution)
     event_bev_img = plot_bev_feature(output['event_bev'][0, -1].cpu().numpy())
@@ -243,7 +247,6 @@ def save_dsec_visualization(batch, output, preds, gts, idx, save_dir, cfg):
     pred_img = plot_boxes_bev(pred_boxes, bev_range, resolution, (0, 255, 0))
     gt_img = plot_boxes_bev(gt_boxes, bev_range, resolution, (255, 0, 0))
 
-    # 调整尺寸一�?
     target_h, target_w = event_img.shape[:2]
     lidar_img = cv2.resize(lidar_img, (target_w, target_h))
     event_bev_img = cv2.resize(event_bev_img, (target_w, target_h))
@@ -251,7 +254,6 @@ def save_dsec_visualization(batch, output, preds, gts, idx, save_dir, cfg):
     pred_img = cv2.resize(pred_img, (target_w, target_h))
     gt_img = cv2.resize(gt_img, (target_w, target_h))
 
-    # 拼接: 2�?�?
     row1 = np.concatenate([event_img, lidar_img, event_bev_img], axis=1)
     row2 = np.concatenate([lidar_bev_img, pred_img, gt_img], axis=1)
     result = np.concatenate([row1, row2], axis=0)
@@ -312,9 +314,14 @@ def export_and_eval(_cfg_path: str, checkpoint: str, dataroot: str, iou_thr: flo
         with torch.no_grad():
             preds, gts, output = gather_batch_outputs(trainer.model, batch, device, cfg=cfg)
 
-        # 可视�?
+        vis_preds = preds
+        if score_thr > 0:
+            vis_preds = []
+            for boxes, scores, labels in preds:
+                mask = scores >= score_thr
+                vis_preds.append((boxes[mask], scores[mask], labels[mask]))
         if visualize and batch_idx % vis_interval == 0:
-            save_dsec_visualization(batch, output, preds, gts, batch_idx, vis_save_path, cfg)
+            save_dsec_visualization(batch, output, vis_preds, gts, batch_idx, vis_save_path, cfg)
 
         for idx, (pred, gt) in enumerate(zip(preds, gts)):
             seq_name = batch.get('sequence_name', ['unknown'])[idx] if 'sequence_name' in batch else f'seq_{idx}'
