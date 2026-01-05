@@ -1,7 +1,8 @@
-import torch
+﻿import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+import math
 from mmcv.runner import auto_fp16, force_fp32
 
 from streamingflow.models.encoder import Encoder
@@ -171,7 +172,7 @@ class streamingflow(nn.Module):
             )
 
         if self.use_lidar:
-            voxel_size = [0.1,0.1,0.2]
+            voxel_size = [float(v) for v in self.cfg.VOXEL.VOXEL_SIZE]
             area_extents = np.array(self.cfg.VOXEL.AREA_EXTENTS, dtype=np.float32)
             point_cloud_range = [
                 float(area_extents[0][0]),
@@ -244,16 +245,43 @@ class streamingflow(nn.Module):
             )
             self.voxelize_reduce = encoders["lidar"].get("voxelize_reduce", True)
             lidar_backbone_output_channels = encoders["lidar"]["backbone"]["output_channels"]
-            actual_lidar_output_channels = 256
+
+            encoder_channels = encoders["lidar"]["backbone"]["encoder_channels"]
+            downsample_xy = 2 ** max(len(encoder_channels) - 1, 0)
+            lidar_h = int(math.ceil(x_size / downsample_xy))
+            lidar_w = int(math.ceil(y_size / downsample_xy))
+
+            def _conv_out_size(n, pad):
+                return int(math.floor((n + 2 * pad - 3) / 2 + 1))
+
+            stage_paddings = encoders["lidar"]["backbone"]["encoder_paddings"]
+            stride2_pads = [stage_paddings[0][-1], stage_paddings[1][-1], stage_paddings[2][-1]]
+            z_out = z_size
+            for pad in stride2_pads:
+                if isinstance(pad, (list, tuple)):
+                    pad_z = max(pad)
+                else:
+                    pad_z = int(pad)
+                z_out = _conv_out_size(z_out, pad_z)
+            z_out = _conv_out_size(z_out, 0)
+            z_out = max(1, z_out)
+
+            actual_lidar_output_channels = lidar_backbone_output_channels * z_out
 
             if self.receptive_field == 1:
                 lidar_start_out_channels = actual_lidar_output_channels
             else:
                 lidar_start_out_channels = self.cfg.MODEL.TEMPORAL_MODEL.START_OUT_CHANNELS
 
-            self.temporal_model_lidar = None
-            self._lidar_input_shape = None
-            self._lidar_temporal_model_initialized = False
+            self.temporal_model_lidar = TemporalModel(
+                actual_lidar_output_channels,
+                self.receptive_field,
+                input_shape=(lidar_h, lidar_w),
+                start_out_channels=lidar_start_out_channels,
+                extra_in_channels=self.cfg.MODEL.TEMPORAL_MODEL.EXTRA_IN_CHANNELS,
+                n_spatial_layers_between_temporal_layers=self.cfg.MODEL.TEMPORAL_MODEL.INBETWEEN_LAYERS,
+                use_pyramid_pooling=self.cfg.MODEL.TEMPORAL_MODEL.PYRAMID_POOLING,
+            )
 
         if self.cfg.PLANNING.ENABLED:
             self.planning = Planning(cfg, self.encoder_out_channels, 6, gru_state_size=self.cfg.PLANNING.GRU_STATE_SIZE)
@@ -316,14 +344,6 @@ class streamingflow(nn.Module):
                 f, c = ret
                 n = None
 
-            # if k == 0 and c.numel() > 0:
-                # if c.shape[1] >= 3:
-                #     print(f"    Dim 0: [{c[:, 0].min().item()}, {c[:, 0].max().item()}]")
-                #     print(f"    Dim 1: [{c[:, 1].min().item()}, {c[:, 1].max().item()}]")
-                #     print(f"    Dim 2: [{c[:, 2].min().item()}, {c[:, 2].max().item()}]")
-                # if n is not None:
-                #     print(f"  Num points per voxel: min={n.min().item()}, max={n.max().item()}, mean={n.float().mean().item():.2f}")
-
             feats.append(f)
             padded_c = F.pad(c, (1, 0), mode="constant", value=k)
             coords.append(padded_c)
@@ -341,24 +361,6 @@ class streamingflow(nn.Module):
         coords = torch.cat(coords, dim=0)
 
         sparse_shape = self.encoders["lidar"]["backbone"].sparse_shape
-        # if coords.shape[1] >= 4:
-        #     coord1_max = coords[:, 1].max().item()
-        #     coord2_max = coords[:, 2].max().item()
-        #     coord3_max = coords[:, 3].max().item()
-
-            # if coord1_max >= sparse_shape[2]:
-            #     print(f"[ERROR] Coord dim 1 ({coord1_max}) >= sparse_shape[2] ({sparse_shape[2]}) - X axis overflow!")
-            # if coord2_max >= sparse_shape[1]:
-            #     print(f"[ERROR] Coord dim 2 ({coord2_max}) >= sparse_shape[1] ({sparse_shape[1]}) - Y axis overflow!")
-            # if coord3_max >= sparse_shape[0]:
-            #     print(f"[ERROR] Coord dim 3 ({coord3_max}) >= sparse_shape[0] ({sparse_shape[0]}) - Z axis overflow!")
-
-            # if coord1_max >= sparse_shape[0]:
-            #     print(f"[ERROR] Coord dim 1 ({coord1_max}) >= sparse_shape[0] ({sparse_shape[0]}) - Z axis overflow (if format is [b,z,y,x])!")
-            # if coord2_max >= sparse_shape[1]:
-            #     print(f"[ERROR] Coord dim 2 ({coord2_max}) >= sparse_shape[1] ({sparse_shape[1]}) - Y axis overflow (if format is [b,z,y,x])!")
-            # if coord3_max >= sparse_shape[2]:
-            #     print(f"[ERROR] Coord dim 3 ({coord3_max}) >= sparse_shape[2] ({sparse_shape[2]}) - X axis overflow (if format is [b,z,y,x])!")
 
         if len(sizes) > 0:
             sizes = torch.cat(sizes, dim=0)
@@ -382,28 +384,10 @@ class streamingflow(nn.Module):
         coords = coords.contiguous()
         # coords = coords[:, [0, 3, 2, 1]].contiguous()
 
-        # if coords.shape[1] >= 4:
-        #     z_coords = coords[:, 1]
-        #     y_coords = coords[:, 2]
-        #     x_coords = coords[:, 3]
-        #     sparse_shape = self.encoders['lidar']['backbone'].sparse_shape
-        #     if z_coords.max().item() >= sparse_shape[0]:
-        #         print(f"[ERROR] Z coordinate overflow: {z_coords.max().item()} >= {sparse_shape[0]}")
-        #     if y_coords.max().item() >= sparse_shape[1]:
-        #         print(f"[ERROR] Y coordinate overflow: {y_coords.max().item()} >= {sparse_shape[1]}")
-        #     if x_coords.max().item() >= sparse_shape[2]:
-        #         print(f"[ERROR] X coordinate overflow: {x_coords.max().item()} >= {sparse_shape[2]}")
-
         try:
             x = self.encoders["lidar"]["backbone"](feats, coords, batch_size, sizes=sizes)
             return x
         except RuntimeError as e:
-            # if coords.numel() > 0:
-            #     print(f"  Coords sample (first 10):")
-            #     try:
-            #         print(f"    {coords[:min(10, len(coords))].cpu().numpy()}")
-            #     except:
-            #         print(f"    (Unable to print coords due to CUDA error)")
             raise
 
     def extract_lidar_features_time_series(self, points, T=None):
@@ -465,18 +449,10 @@ class streamingflow(nn.Module):
         lidar_states = None
 
         if self.use_lidar:
-            # 将 DataLoader 提供的点云列表标准化为张量列表，兼容 numpy 数组与张量输入
-            # 注意：points 可能是两种格式：
-            # 1. list[Tensor]：每个样本一个点云（TIME_RECEPTIVE_FIELD=1）
-            # 2. list[list[Tensor]]：每个样本多个时间步的点云（TIME_RECEPTIVE_FIELD>1）
-            
             if isinstance(points, list) and len(points) > 0:
                 # 先检查第一个元素是否是列表（多时间步格式）
                 first_point = points[0]
                 if isinstance(first_point, (list, tuple)):
-                    # 格式2：points = [[t0_pc, t1_pc, t2_pc], [t0_pc, t1_pc, t2_pc], ...]
-                    # 已经是多时间步格式，跳过标准化，直接进入多时间步处理
-                    # 但需要确保内部的点云都是 Tensor 格式
                     norm_points = []
                     for sample_idx, sample_points in enumerate(points):
                         if not isinstance(sample_points, (list, tuple)):
@@ -508,8 +484,6 @@ class streamingflow(nn.Module):
                         norm_points.append(norm_sample_points)
                     points = norm_points
                 else:
-                    # 格式1：points = [pc0, pc1, pc2, ...]（每个样本一个点云）
-                    # 需要标准化为 Tensor 列表
                     norm_points = []
                     for idx, p in enumerate(points):
                         if isinstance(p, np.ndarray):
@@ -528,60 +502,18 @@ class streamingflow(nn.Module):
                 raise TypeError(
                     f"Expected points to be list[Tensor], list[list[Tensor]], or Tensor, but got {type(points)}"
                 )
-
-            # points: List[Tensor(N_i, C)] 或 List[List[Tensor(N_i, C)]]
-            # 长度为 B（batch size）
-            # 每个元素可能是一个点云（TIME_RECEPTIVE_FIELD=1）或点云列表（TIME_RECEPTIVE_FIELD>1）
             T = self.receptive_field
             
-            # 检查 points 的格式：是 [batch 中的点云列表] 还是 [batch 中的多时间步点云列表]
             first_point = points[0]
             if isinstance(first_point, list):
-                # 格式：points = [[t0_pc, t1_pc, t2_pc], [t0_pc, t1_pc, t2_pc], ...]
-                # 每个样本有 T 个时间步的点云
-                # 使用集中式方法在模型端逐时间步体素化
                 x = self.extract_lidar_features_time_series(points, T=T)  # [B, T, C, H, W]
             else:
-                # 格式：points = [pc0, pc1, pc2, ...]（每个样本一个点云，TIME_RECEPTIVE_FIELD=1）
+                # 格式：points = [pc0, pc1, pc2, ...]（每个样本一个点云，TIME_RECEPTIVE_FIELD=1�?
                 B = len(points)
                 # voxelize + 稀疏卷积编码，返回 [B, C, H_det, W_det]
                 feature = self.extract_lidar_features(points)
                 _, C, H_det, W_det = feature.shape
-                # 显式恢复时间维度，形状 [B, T, C, H, W]
-                # 当 T=1 时，直接添加时间维度
                 x = feature.unsqueeze(1)  # [B, 1, C, H, W]
-
-            # 延迟初始化 temporal_model_lidar：使用实际的 LiDAR 特征空间尺寸
-            if not self._lidar_temporal_model_initialized:
-                # 从实际特征中获取空间尺寸
-                _, _, _, H_actual, W_actual = x.shape
-                actual_lidar_input_shape = (H_actual, W_actual)
-                
-                # 计算实际的输出通道数
-                actual_lidar_output_channels = x.shape[2]  # C
-                
-                # 确定 start_out_channels
-                if self.receptive_field == 1:
-                    lidar_start_out_channels = actual_lidar_output_channels
-                else:
-                    lidar_start_out_channels = self.cfg.MODEL.TEMPORAL_MODEL.START_OUT_CHANNELS
-                
-                # 初始化 temporal_model_lidar
-                self.temporal_model_lidar = TemporalModel(
-                    actual_lidar_output_channels,
-                    self.receptive_field,
-                    input_shape=actual_lidar_input_shape,  # 使用实际的空间尺寸
-                    start_out_channels=lidar_start_out_channels,
-                    extra_in_channels=self.cfg.MODEL.TEMPORAL_MODEL.EXTRA_IN_CHANNELS,
-                    n_spatial_layers_between_temporal_layers=self.cfg.MODEL.TEMPORAL_MODEL.INBETWEEN_LAYERS,
-                    use_pyramid_pooling=self.cfg.MODEL.TEMPORAL_MODEL.PYRAMID_POOLING,
-                )
-                self._lidar_temporal_model_initialized = True
-                self._lidar_input_shape = actual_lidar_input_shape
-                
-                # 将模型移到正确的设备
-                if next(self.parameters()).is_cuda:
-                    self.temporal_model_lidar = self.temporal_model_lidar.cuda()
 
             lidar_states = self.temporal_model_lidar(x)
 
@@ -669,11 +601,6 @@ class streamingflow(nn.Module):
 
             # Check bev_sequence for NaN/Inf after event fusion
             if torch.isnan(bev_sequence).any() or torch.isinf(bev_sequence).any():
-                # print(f"Warning: NaN/Inf in bev_sequence after event fusion")
-                # print(f"  bev_sequence stats: min={bev_sequence.min()}, max={bev_sequence.max()}, mean={bev_sequence.mean()}")
-                # if "event" in output and "bev" in output["event"]:
-                #     print(f"  event_data['bev'] stats: min={event_data['bev'].min()}, max={event_data['bev'].max()}, mean={event_data['bev'].mean()}")
-                # Replace NaN/Inf with 0
                 bev_sequence = torch.where(
                     torch.isnan(bev_sequence) | torch.isinf(bev_sequence),
                     torch.zeros_like(bev_sequence),
@@ -695,12 +622,10 @@ class streamingflow(nn.Module):
             bev_sequence = torch.cat([bev_sequence, future_egomotions_spatial], dim=-3)
 
         camera_states = self.temporal_model(bev_sequence)
-        
-        # 确定标准空间尺寸和通道数
         standard_spatial_size = self.bev_size  # (200, 200) - BEV 网格尺寸
-        standard_channels = self.future_pred_in_channels  # 64 - 标准通道数
+        standard_channels = self.future_pred_in_channels  # 64
         
-        # 统一 camera_states 的空间尺寸和通道数
+        # 统一 camera_states 的空间尺寸和通道
         if camera_states is not None:
             B, T, C, H, W = camera_states.shape
             # 通道对齐
@@ -722,7 +647,7 @@ class streamingflow(nn.Module):
                     align_corners=False
                 ).view(B, T, standard_channels, *standard_spatial_size)
         
-        # 统一 lidar_states 的空间尺寸和通道数
+        # 统一 lidar_states 的空间尺寸和通道
         if lidar_states is not None:
             B, T, C, H, W = lidar_states.shape
             # 通道对齐
@@ -743,10 +668,7 @@ class streamingflow(nn.Module):
                     mode='bilinear',
                     align_corners=False
                 ).view(B, T, standard_channels, *standard_spatial_size)
-        
-        # 设置 states：优先使用 camera_states（包含 event 融合后的结果）
-        # 但保留 lidar_states 不被覆盖，以便 FuturePredictionODE 进行异步融合
-        # 现在 camera_states 和 lidar_states 都已经统一到标准尺寸
+
         if camera_states is not None:
             states = camera_states
         elif lidar_states is not None:
@@ -777,40 +699,21 @@ class streamingflow(nn.Module):
                 camera_states_hi = hi_outputs["camera"]["bev"].contiguous()  # [B, S_cam, C, H, W]
 
         if self.n_future > 0:
-            # 保存过去帧（用于后续拼接）
-            # 注意：past_states 使用 states（可能是 camera_states 或 lidar_states）
-            # future_states 将通过 FuturePredictionODE 从 camera_states 和 lidar_states 异步融合得到
-            # 这样 past_states 和 future_states 可能信息不一致，但这是异步融合的设计：
-            # - past_states: 过去帧的单一模态或融合后的状态
-            # - future_states: 通过 NODE 从多模态异步观测预测的未来状态
-            # 
-            # 【关键】现在 camera_states 和 lidar_states 已经在 temporal_model 之后统一到标准尺寸
-            # 因此 past_states 和 future_states 的空间尺寸已经一致，不需要再次对齐
-            past_states = states  # [B, TIME_RECEPTIVE_FIELD, C, H, W] - 已经是标准尺寸
+            past_states = states
             
             present_state = states[:, -1:].contiguous()
-            future_prediction_input = present_state  # 已经是标准尺寸，不需要对齐
-            
-            # camera_states 和 lidar_states 已经在 temporal_model 之后统一到标准尺寸
-            # 直接使用，不需要再次对齐
-            camera_states_for_ode = camera_states  # 已经是标准尺寸
-            lidar_states_for_ode = lidar_states   # 已经是标准尺寸
-            
-            # NODE 输出未来帧
-            # FuturePredictionODE 会接收 camera_states 和 lidar_states 及其时间戳，
-            # 按时间戳排序后进行异步融合和预测
-            # 注意：camera_states 和 lidar_states 已经统一到标准尺寸，空间尺寸一致
-            
-            # 对齐 timestamp 到 receptive_field，防止在 FuturePredictionODE 中索引越界
+            future_prediction_input = present_state 
+            camera_states_for_ode = camera_states
+            lidar_states_for_ode = lidar_states
             camera_timestamp_ode = camera_timestamp
             # camera_timestamp_ode = camera_timestamp[:, :self.receptive_field] if camera_timestamp is not None else None
             lidar_timestamp_ode = lidar_timestamp
             # lidar_timestamp_ode = lidar_timestamp[:, :self.receptive_field] if lidar_timestamp is not None else None
 
             future_states, auxilary_loss = self.future_prediction_ode(
-                future_prediction_input,  # 已经是标准尺寸
-                camera_states_for_ode,    # 已经是标准尺寸
-                lidar_states_for_ode,     # 已经是标准尺寸
+                future_prediction_input,
+                camera_states_for_ode,
+                lidar_states_for_ode,
                 camera_timestamp_ode,
                 lidar_timestamp_ode,
                 target_timestamp,
@@ -818,17 +721,12 @@ class streamingflow(nn.Module):
                 camera_timestamp_hi=camera_timestamp_hi,
             )
             
-            # 确保 past_states 和 future_states 的通道数和空间尺寸匹配
-            # 【关键】由于已经在 temporal_model 之后统一了尺寸，past_states 和 future_states 应该已经匹配
-            # 但为了安全，仍然检查并处理不匹配的情况
             past_states_channels = past_states.shape[2]
             future_states_channels = future_states.shape[2]
             past_states_spatial = (past_states.shape[3], past_states.shape[4])
             future_states_spatial = (future_states.shape[3], future_states.shape[4])
             
-            # 检查空间尺寸是否匹配
             if past_states_spatial != future_states_spatial:
-                # 空间尺寸不匹配，需要对齐 future_states 到 past_states 的尺寸
                 B_fut, T_fut, C_fut, H_fut, W_fut = future_states.shape
                 future_states = torch.nn.functional.interpolate(
                     future_states.view(B_fut * T_fut, C_fut, H_fut, W_fut),
@@ -836,26 +734,20 @@ class streamingflow(nn.Module):
                     mode='bilinear',
                     align_corners=False
                 ).view(B_fut, T_fut, C_fut, *past_states_spatial)
-            
-            # 检查通道数是否匹配
+
             if past_states_channels != future_states_channels:
-                # 通道数不匹配，需要投影
-                # 使用 1x1 卷积进行通道数对齐
-                # 动态创建投影层（延迟初始化，避免在 __init__ 中处理复杂的条件逻辑）
                 projection_key = f'past_states_projection_{past_states_channels}_to_{future_states_channels}'
                 if not hasattr(self, 'past_states_projections'):
                     # 初始化投影层字典
                     self.past_states_projections = nn.ModuleDict()
                 
                 if projection_key not in self.past_states_projections:
-                    # 创建新的投影层并注册为模块
                     projection = nn.Conv2d(
                         past_states_channels,
                         future_states_channels,
                         kernel_size=1,
                         bias=False
                     )
-                    # 使用 Xavier 初始化
                     nn.init.xavier_uniform_(projection.weight)
                     self.past_states_projections[projection_key] = projection
                 
@@ -864,8 +756,6 @@ class streamingflow(nn.Module):
                 past_states_reshaped = past_states.view(B * T, C_old, H, W)
                 past_states_projected = self.past_states_projections[projection_key](past_states_reshaped)
                 past_states = past_states_projected.view(B, T, future_states_channels, H, W)
-            
-            # 拼接过去帧和未来帧: [B, TIME_RECEPTIVE_FIELD + n_future, C, H, W]
             states = future_states.squeeze(1)
     
             # predict BEV outputs
@@ -880,8 +770,6 @@ class streamingflow(nn.Module):
             bev_output = self.decoder(states, metas)
 
         output = {**output, **bev_output}
-
-        # 输出BEV中间特征用于可视化
         output["event_bev"] = event_data["bev"] if event_data is not None else None
         output["lidar_states"] = lidar_states
         output["camera_states"] = camera_states
@@ -933,16 +821,6 @@ class streamingflow(nn.Module):
         return x, depth, cam_front
 
     def event_encoder_forward(self, event_frames):
-        """
-        事件编码器前向传播。
-        
-        Args:
-            event_frames: [B*S*N, C, H, W] 其中C是每个时间步的通道数（IN_CHANNELS）
-        
-        Returns:
-            feats: [B*S*N, out_channels, H', W']
-            depth_logits: [B*S*N, depth_bins, H', W'] 或 None
-        """
         if not self.use_event:
             raise RuntimeError("Event encoder requested but USE_EVENT is False.")
         # event_frames已经是[B*S*N, C, H, W]形状，直接传入编码器
@@ -950,27 +828,20 @@ class streamingflow(nn.Module):
         return feats, depth_logits
 
     def _resize_event_depth_bins(self, depth_logits, target_bins):
-        # 检查输入维度
         if depth_logits.dim() == 4:
-            # 如果是 4 维 [B, D, H, W]，需要先转换为 6 维
             b, d, h, w = depth_logits.shape
-            # 假设这是单个样本，添加 S 和 N 维度
             depth_logits = depth_logits.unsqueeze(1).unsqueeze(1)  # [B, 1, 1, D, H, W]
         elif depth_logits.dim() == 5:
-            # 如果是 5 维，可能是 [B, S, D, H, W] 或 [B, N, D, H, W]
-            # 需要判断并添加缺失的维度
             if depth_logits.shape[2] == target_bins or depth_logits.shape[1] == target_bins:
-                # 可能是 [B, S, D, H, W] 或 [B, N, D, H, W]
                 b = depth_logits.shape[0]
                 if depth_logits.shape[1] == target_bins:
-                    # [B, D, H, W, ?] 或 [B, N, D, H, W]
                     depth_logits = depth_logits.unsqueeze(1)  # 添加 S 维度
                 else:
                     # [B, S, D, H, W]
                     depth_logits = depth_logits.unsqueeze(2)  # 添加 N 维度
         
         if depth_logits.dim() != 6:
-            raise ValueError(f"depth_logits 必须是 6 维 [B, S, N, D, H, W]，但得到 {depth_logits.dim()} 维: {depth_logits.shape}")
+            raise ValueError(f"depth_logits 必须是6维 [B, S, N, D, H, W]，但得到 {depth_logits.dim()} 维 {depth_logits.shape}")
         
         b, s, n, d, h, w = depth_logits.shape
         
@@ -995,29 +866,17 @@ class streamingflow(nn.Module):
         if frames.dim() == 5:
             frames = frames.unsqueeze(0)
         if frames.dim() != 6:
-            raise ValueError("事件帧需为[B, S, N, C, H, W]或[S, N, C, H, W]格式。")
+            raise ValueError("事件帧需为[B, S, N, C, H, W]或[S, N, C, H, W]格式")
         return frames.contiguous()
 
     def _stack_event_time_to_channels(self, event_frames, expected_channels):
-        """
-        将事件帧的时间维度堆叠到通道维度，以匹配EVRT编码器的输入要求。
-        对每个(B, N)组合，将S个时间步的C通道堆叠成S*C通道。
-        
-        Args:
-            event_frames: [B, S, N, C, H, W] 其中C是每个时间步的通道数（BINS）
-            expected_channels: EVRT期望的输入通道数（IN_CHANNELS）
-        
-        Returns:
-            [B*N, expected_channels, H, W] 用于直接输入EVRT编码器
-        """
         b, s, n, c, h, w = event_frames.shape
         stacked_channels = s * c
         
         if stacked_channels != expected_channels:
             raise ValueError(
-                f"时间步数S={s} × 通道数C={c} = {stacked_channels}，"
-                f"与期望通道数{expected_channels}不匹配。"
-                f"请检查TIME_RECEPTIVE_FIELD和EVENT.BINS配置。"
+                f"事件帧时间堆叠后的通道数 {stacked_channels} 与预期的 {expected_channels} 不符。"
+                f"请检查序列长度 S={s} 和每帧通道数 C={c}。" 
             )
         
         # [B, S, N, C, H, W] -> [B, N, S, C, H, W] -> [B, N, S*C, H, W] -> [B*N, S*C, H, W]
@@ -1041,7 +900,7 @@ class streamingflow(nn.Module):
             frames = self._normalize_event_frame_shape(frames)
 
         if frames.shape[1] < seq_len:
-            raise ValueError("事件帧长度不足，无法覆盖所需的时间步。")
+            raise ValueError("Event frames length is shorter than required sequence length.")
         if frames.shape[1] > seq_len:
             frames = frames[:, :seq_len]
         return frames
@@ -1166,24 +1025,17 @@ class streamingflow(nn.Module):
                 # flatten x
                 x_b = flow_b[t]
                 geometry_b = flow_geo[t]
-                
-                # 调整 geometry_b 的空间维度以匹配 x_b（如果需要）
-                # 注意：图像分支中 geometry 和 camera_volume 的空间维度通常是一致的，
-                # 但事件分支中 event_volume 的空间维度可能与 geometry 不同（基于不同的编码器输出）
-                # x_b: [n, d, h_x, w_x, c]
-                # geometry_b: [n, d, h_geo, w_geo, 3]
                 n_geo, d_geo, h_geo, w_geo, _ = geometry_b.shape
                 n_x, d_x, h_x, w_x, _ = x_b.shape
                 
-                # 验证 n 和 d 维度应该匹配（如果不匹配说明有严重问题）
                 assert n_geo == n_x, f"Camera/event count mismatch: {n_geo} != {n_x}"
                 assert d_geo == d_x, f"Depth channel mismatch: {d_geo} != {d_x}"
-                
+
                 # 只有当空间维度不匹配时才进行调整（事件分支的情况）
                 # 图像分支通常不需要这个调整，因为 geometry 和 camera_volume 基于相同的图像配置
                 if h_geo != h_x or w_geo != w_x:
-                    # 将 geometry_b 从 [n, d, h_geo, w_geo, 3] 调整为 [n, d, h_x, w_x, 3]
-                    # 使用双线性插值：需要先 permute 为 [n, d, 3, h_geo, w_geo]，然后插值到 [n, d, 3, h_x, w_x]
+                    # geometry_b [n, d, h_geo, w_geo, 3] 调整 [n, d, h_x, w_x, 3]
+                    # 使用双线性插值：需要先 permute [n, d, 3, h_geo, w_geo]，然后插值到 [n, d, 3, h_x, w_x]
                     geometry_b_permuted = geometry_b.permute(0, 1, 4, 2, 3)  # [n, d, 3, h_geo, w_geo]
                     geometry_b_resized = F.interpolate(
                         geometry_b_permuted.reshape(n_geo * d_geo, 3, h_geo, w_geo),
@@ -1245,18 +1097,15 @@ class streamingflow(nn.Module):
                 bins = getattr(self.cfg.MODEL.EVENT, "BINS", 10)
                 expected_channels = 2 * bins
             
-            # 直接reshape为 [B*S*N, C, H, W]，其中C是每个时间步的通道数（不再stacking）
             b, s, n, c, h, w = event_frames.shape
             if c != expected_channels:
                 raise ValueError(
-                    f"事件帧通道数C={c}与期望通道数{expected_channels}不匹配。"
-                    f"请检查EVENT.IN_CHANNELS和EVENT.BINS配置。"
+                    f"事件帧的通道数 {c} 与预期的 {expected_channels} 不符。"
+                    f"请检查配置 MODEL.EVENT.IN_CHANNELS 是否正确设置。"
                 )
             
             # [B, S, N, C, H, W] -> [B*S*N, C, H, W]
             event_reshaped = event_frames.view(b * s * n, c, h, w)
-            
-            # 编码器前向传播: [B*S*N, C, H, W] -> [B*S*N, out_channels, H', W']
             event_feats, event_depth_logits = self.event_encoder_forward(event_reshaped)
             
             # Validate event encoder outputs
@@ -1268,7 +1117,6 @@ class streamingflow(nn.Module):
             event_feats = event_feats.view(b, s, n, *event_feats.shape[1:])
 
             if event_depth_logits is not None:
-                # event_depth_logits 是 [B*S*N, D, H, W]，直接转换为 [B, S, N, D, H, W]
                 event_depth_logits_out = event_depth_logits.view(b, s, n, *event_depth_logits.shape[1:])
                 event_depth_logits_out = self._resize_event_depth_bins(event_depth_logits_out, self.depth_channels)
             else:
