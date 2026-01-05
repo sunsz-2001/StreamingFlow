@@ -463,13 +463,13 @@ def generate_instance_colours(instance_map):
             }
 
 
-# ===== DSEC可视化函数 =====
+# ===== DSEC可视化函�?=====
 
 def plot_event_frame(event_grid: np.ndarray) -> np.ndarray:
-    """事件极性可视化。红色=正事件，蓝色=负事件"""
+    """事件极性可视化。红�?正事件，蓝色=负事�?""
     C, H, W = event_grid.shape
-    pos = event_grid[:C//2].sum(axis=0)  # 正事件
-    neg = event_grid[C//2:].sum(axis=0)  # 负事件
+    pos = event_grid[:C//2].sum(axis=0)  # 正事�?
+    neg = event_grid[C//2:].sum(axis=0)  # 负事�?
 
     # Use a black background so positive/negative events stand out.
     img = np.zeros((H, W, 3), dtype=np.uint8)
@@ -481,7 +481,7 @@ def plot_event_frame(event_grid: np.ndarray) -> np.ndarray:
 
 
 def plot_lidar_bev(points: np.ndarray, bev_range: tuple, resolution: float) -> np.ndarray:
-    """LiDAR点云BEV投影。使用高度着色"""
+    """LiDAR点云BEV投影。使用高度着�?""
     x_min, x_max, y_min, y_max = bev_range
     H = int((x_max - x_min) / resolution)
     W = int((y_max - y_min) / resolution)
@@ -494,12 +494,12 @@ def plot_lidar_bev(points: np.ndarray, bev_range: tuple, resolution: float) -> n
     py = ((y - y_min) / resolution).astype(np.int32)
 
     img = np.zeros((H, W), dtype=np.float32)
-    np.maximum.at(img, (px, py), z)  # 取最大高度
+    np.maximum.at(img, (px, py), z)  # 取最大高�?
     return heatmap_image(img.astype(np.float64))
 
 
 def get_box_corners_2d(cx: float, cy: float, dx: float, dy: float, yaw: float) -> np.ndarray:
-    """计算2D框角点"""
+    """计算2D框角�?""
     cos_yaw, sin_yaw = np.cos(yaw), np.sin(yaw)
     half_dx, half_dy = dx / 2, dy / 2
     corners = np.array([
@@ -512,7 +512,7 @@ def get_box_corners_2d(cx: float, cy: float, dx: float, dy: float, yaw: float) -
 
 def plot_boxes_bev(boxes: np.ndarray, bev_range: tuple, resolution: float,
                    color: tuple, img: np.ndarray = None) -> np.ndarray:
-    """在BEV图上绘制3D框俯视投影"""
+    """在BEV图上绘制3D框俯视投�?""
     import cv2
     x_min, x_max, y_min, y_max = bev_range
     H = int((x_max - x_min) / resolution)
@@ -530,6 +530,9 @@ def plot_boxes_bev(boxes: np.ndarray, bev_range: tuple, resolution: float,
 
 
 def plot_bev_feature(feature: np.ndarray) -> np.ndarray:
-    """BEV特征热力图。取通道均值"""
+    """BEV特征热力图。取通道均�?""
     feat_mean = feature.mean(axis=0).astype(np.float64)
-    return heatmap_image(feat_mean)
+    # Normalize to use full dynamic range for better contrast.
+    feat_mean = _normalise(feat_mean)
+    return heatmap_image(feat_mean, autoscale=False)
+
