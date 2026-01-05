@@ -150,7 +150,7 @@ _C.MODEL.EVENT.DOWNSAMPLE = 8  # Event encoder downsampling rate (fixed for Even
 
 
 _C.VOXEL = CN()  # Lidar pointcloud voxelization
-_C.VOXEL.VOXEL_SIZE = (0.1, 0.1, 0.4)
+_C.VOXEL.VOXEL_SIZE = (0.1, 0.1, 0.2)
 # _C.VOXEL.VOXEL_SIZE = (0.8, 0.8, 0.4)
 _C.VOXEL.AREA_EXTENTS = [[0, 51.2], [-32, 32], [-5, 3]]
 # _C.VOXEL.AREA_EXTENTS = [[-51.2, 51.2], [-51.2, 51.2], [-3, 2]]

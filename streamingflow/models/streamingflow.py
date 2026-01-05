@@ -259,7 +259,7 @@ class streamingflow(nn.Module):
             z_out = z_size
             for pad in stride2_pads:
                 if isinstance(pad, (list, tuple)):
-                    pad_z = max(pad)
+                    pad_z = pad[-1]
                 else:
                     pad_z = int(pad)
                 z_out = _conv_out_size(z_out, pad_z)
