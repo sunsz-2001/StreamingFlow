@@ -321,6 +321,15 @@ def export_and_eval(_cfg_path: str, checkpoint: str, dataroot: str, iou_thr: flo
                 mask = scores >= score_thr
                 vis_preds.append((boxes[mask], scores[mask], labels[mask]))
         if visualize and batch_idx % vis_interval == 0:
+            if score_thr > 0:
+                before = sum(len(p[0]) for p in preds)
+                after = sum(len(p[0]) for p in vis_preds)
+                if before > 0:
+                    all_scores = torch.cat([p[1] for p in preds], dim=0)
+                    print(
+                        f"[Vis] score_thr={score_thr} kept {after}/{before} "
+                        f"scores(min={all_scores.min():.3f}, max={all_scores.max():.3f})"
+                    )
             save_dsec_visualization(batch, output, vis_preds, gts, batch_idx, vis_save_path, cfg)
 
         for idx, (pred, gt) in enumerate(zip(preds, gts)):
