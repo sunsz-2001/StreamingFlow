@@ -1143,7 +1143,7 @@ class DatasetDSEC(torch.utils.data.Dataset):
         """
         if self.mode == 'train':
             assert 'gt_boxes' in data_dict, 'gt_boxes should be provided for training'
-            gt_boxes_mask = np.array([n in self.class_names for n in data_dict['gt_names']], dtype=np.bool_)
+            # gt_boxes_mask = np.array([n in self.class_names for n in data_dict['gt_names']], dtype=np.bool_)
             # data_dict_ = copy.deepcopy(data_dict)
 
         if data_dict.get('gt_boxes', None) is not None:
@@ -1504,9 +1504,11 @@ class DatasetDSEC(torch.utils.data.Dataset):
             gt_len_index = 0
             anno_names = []
             gt_obj_ids = []
-
-            for i in range(len(current_info['seq_annos'])):
-                annos = current_info['seq_annos'][i]
+            seq_annos_flow = current_info['seq_annos']
+            interval = self.event_speed//self.num_speed
+            seq_annos_flow = seq_annos_flow[interval-1::interval]
+            for i in range(len(seq_annos_flow)):
+                annos = seq_annos_flow[i]
                 
                 gt_boxes_lidar.append(annos['gt_boxes_lidar'])
                 gt_len_index += len(annos['gt_boxes_lidar'])
@@ -1519,7 +1521,7 @@ class DatasetDSEC(torch.utils.data.Dataset):
             gt_names = np.concatenate(anno_names)
             gt_len = np.array(gt_len)
             gt_obj_ids = np.concatenate(gt_obj_ids)
-                
+            
                 
 
             input_dict.update({
@@ -1530,7 +1532,6 @@ class DatasetDSEC(torch.utils.data.Dataset):
                 'gt_obj_ids': gt_obj_ids
             })
         data_dict = self.prepare_data(data_dict=copy.deepcopy(input_dict))
-
         # 构建检测任务的metas（如果启用检测）
         if getattr(self.cfg, 'DETECTION', None) and getattr(self.cfg.DETECTION, 'ENABLED', False):
             # 计算BEV网格参数
