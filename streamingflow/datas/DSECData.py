@@ -11,15 +11,9 @@ import torch
 import torchvision
 import torch.nn.functional as F
 from pyquaternion import Quaternion
-from nuscenes.nuscenes import NuScenes
 from nuscenes.utils.splits import create_splits_scenes
 from nuscenes.utils.data_classes import Box
-from lyft_dataset_sdk.lyftdataset import LyftDataset
-from nuscenes.utils.data_classes import RadarPointCloud
-from nuscenes.utils.data_classes import PointCloud
 from nuscenes.utils.geometry_utils import transform_matrix
-from nuscenes.map_expansion.map_api import NuScenesMap
-from nuscenes.utils.data_classes import Box
 from functools import reduce
 from streamingflow.utils.geometry import (
     update_intrinsics,
@@ -1506,7 +1500,9 @@ class DatasetDSEC(torch.utils.data.Dataset):
             gt_obj_ids = []
             seq_annos_flow = current_info['seq_annos']
             interval = self.event_speed//self.num_speed
+            
             seq_annos_flow = seq_annos_flow[interval-1::interval]
+            if True:seq_annos_flow = [seq_annos_flow[0]]
             for i in range(len(seq_annos_flow)):
                 annos = seq_annos_flow[i]
                 

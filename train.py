@@ -73,14 +73,6 @@ def main():
                 # 严格避免形状不匹配导致的隐性错误
                 continue
             filtered_state[k] = v
-
-        missing_keys, unexpected_keys = model.load_state_dict(filtered_state, strict=False)
-        # print(f"Loaded pretrained weights from {cfg.PRETRAINED.PATH}")
-        # if missing_keys:
-        #     print(f"Missing keys (not loaded, kept init): {len(missing_keys)}")
-        # if unexpected_keys:
-        #     print(f"Unexpected keys in checkpoint (ignored): {len(unexpected_keys)}")
-
     save_dir = os.path.join(
         cfg.LOG_DIR, cfg.TAG
     )
@@ -117,11 +109,9 @@ def main():
                                 # print(f"WARNING: NaN/Inf found in checkpoint parameter: {key}")
                                 has_nan_in_ckpt = True
                     if has_nan_in_ckpt:
-                        # print("WARNING: Checkpoint contains NaN/Inf weights! Will not resume from this checkpoint.")
-                        # print("Starting training from scratch.")
                         latest_ckpt = None
                     else:
-                        # print(f"Checkpoint validation passed: {latest_ckpt}")
+                        print(f"Checkpoint validation passed: {latest_ckpt}")
                 else:
                     # print(f"WARNING: Checkpoint file does not contain 'state_dict' key. Will not resume.")
                     latest_ckpt = None
@@ -136,7 +126,7 @@ def main():
     num_gpus = len(cfg.GPUS) if isinstance(cfg.GPUS, list) else 1
     if num_gpus > 1:
         accelerator = 'ddp'
-        plugins = DDPPlugin(find_unused_parameters=False)
+        plugins = DDPPlugin(find_unused_parameters=True)
     else:
         accelerator = None
         plugins = None

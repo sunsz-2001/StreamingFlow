@@ -1,11 +1,12 @@
 TAG: 'dsec_event_lidar_eval'  # 训练日志和检查点保存目录名（与 event-only 区分）
 
+# GPUS: [1]
 GPUS: [0,1,2,3]
 BATCHSIZE: 2
 PRECISION: 32  # 16 或 32，混合精度训练使用 16
 EPOCHS: 50  # 训练轮数
 
-N_WORKERS: 8  # 数据加载器工作进程数
+N_WORKERS: 4  # 数据加载器工作进程数
 # LOG_DIR: 'logs'  # 日志保存目录（默认：'logs'）
 # GRAD_NORM_CLIP: 5  # 梯度裁剪阈值（默认：5）
 # LOGGING_INTERVAL: 500  # 日志记录间隔（默认：500）
@@ -55,18 +56,18 @@ N_FUTURE_FRAMES: 1  # 未来预测帧数
 # 建议值：4-6（根据任务需求调整，值越大计算量越大）
 
 IMAGE:
-  FINAL_DIM: [256, 512]
-  RESIZE_SCALE: 1.0
+  FINAL_DIM: (240, 360)
+  RESIZE_SCALE: 0.5
   TOP_CROP: 0
-  ORIGINAL_HEIGHT: 256
-  ORIGINAL_WIDTH: 512
+  ORIGINAL_HEIGHT: 640
+  ORIGINAL_WIDTH: 480
   NAMES: ['camera_0']
 
 LIFT:
   GT_DEPTH: False
   GEN_DEPTH: False
-  X_BOUND: [-50.0, 50.0, 0.5]  # Forward direction [min, max, resolution]
-  Y_BOUND: [-50.0, 50.0, 0.5]  # Side direction [min, max, resolution]
+  X_BOUND: [0, 51.2, 0.8]  # Forward direction [min, max, resolution]
+  Y_BOUND: [-32, 32, 0.8]  # Side direction [min, max, resolution]
   Z_BOUND: [-10.0, 10.0, 20.0]  # Height [min, max, resolution]
   D_BOUND: [2.0, 50.0, 1.0]  # Depth [min, max, resolution]
 
@@ -148,7 +149,7 @@ DETECTION:
   FFN_CHANNEL: 256
   DROPOUT: 0.1
   AUXILIARY: True
-  OUT_SIZE_FACTOR: 8
+  OUT_SIZE_FACTOR: 1
   DATASET: 'dsec'
 
 OPTIMIZER:

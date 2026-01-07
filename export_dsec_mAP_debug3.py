@@ -10,9 +10,10 @@ from tqdm import tqdm
 from streamingflow.datas.dataloaders import prepare_dataloaders
 from streamingflow.trainer_dsec import TrainingModule
 from streamingflow.utils.network import preprocess_batch
-from streamingflow.config import get_cfg, get_parser
+from streamingflow.config_debug import get_cfg, get_parser
 from mmdet3d.core.bbox.iou_calculators.iou3d_calculator import bbox_overlaps_3d
 
+import open3d as o3d
 
 def to_device(batch: Dict, device: torch.device) -> Dict:
     preprocess_batch(batch, device)
@@ -208,6 +209,40 @@ def compute_ap_per_class(preds, gts, num_classes: int, iou_thr: float) -> Dict[s
     return ap_results
 
 
+def vis_point(pts, preds, gts, win_name):
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(pts[:,:3])
+    pred_boxes = preds[0][0].numpy()
+    gt_boxes = gts[0][0].numpy()
+    def box7d2obb(box,color):
+        if len(box) == 7:
+            x,y,z,dx,dy,dz,yaw = box
+        if len(box) == 9:
+            x,y,z,dx,dy,dz,yaw,_,_ = box
+        center = np.array([x,y,z])
+        extent = np.array([dx,dy,dz])
+        R = o3d.geometry.get_rotation_matrix_from_axis_angle([0,0,yaw])
+        obb = o3d.geometry.OrientedBoundingBox(center,R,extent)
+        obb.color = color
+        return obb
+    
+    pred_obbs = []
+    if len(pred_boxes) >0:
+        for box in pred_boxes:
+            obb = box7d2obb(box[:7],[0,1,0])
+            pred_obbs.append(obb)
+    gt_obbs = []
+    if len(gt_boxes) >0:
+        for box in gt_boxes:
+            obb = box7d2obb(box[:7],[1,0,0])
+            gt_obbs.append(obb)
+    o3d.visualization.draw_geometries(
+        [pcd]+pred_obbs+gt_obbs,
+        window_name=win_name,
+        width=1200, height=800
+    )
+    
+
 def save_dsec_visualization(batch, output, preds, gts, idx, save_dir, cfg):
     # event_img     | lidar_img | event_bev_img，
     # lidar_bev_img | pred_img  | gt_img
@@ -243,7 +278,8 @@ def save_dsec_visualization(batch, output, preds, gts, idx, save_dir, cfg):
         points = points
     else:
         raise TypeError(f"Unexpected flow_lidar type: {type(points)}")
-
+    if False:
+        vis_point(points,preds,gts, batch['sequence_name'][-1])
     event_img = plot_event_frame(events)
     lidar_img = plot_lidar_bev(points, bev_range, resolution)
     event_bev_img = plot_bev_feature(output['event_bev'][0, -1].cpu().numpy())
@@ -364,11 +400,11 @@ def export_and_eval(_cfg_path: str, checkpoint: str, dataroot: str, iou_thr: flo
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="DSEC mAP evaluation")
     parser.add_argument("--config-file", default="/home/user/sunsz/StreamingFlow/streamingflow/configs/dsec_event_lidar.yaml")
-    parser.add_argument("--checkpoint", default='/home/user/sunsz/StreamingFlow/logs/dsec_event_lidar_eval/epoch=34-step=18374.ckpt')
+    parser.add_argument("--checkpoint", default='/home/user/sunsz/StreamingFlow/logs/dsec_event_lidar_eval/epoch=49-step=26249.ckpt')
     parser.add_argument("--dataroot", default='/media/switcher/sda/datasets/dsec/')
     parser.add_argument("--iou-thr", type=float, default=0.1)
     parser.add_argument("--score-thr", type=float, default=0.01)
-    parser.add_argument("--visualize", action="store_true", help="Enable visualization")
+    parser.add_argument("--visualize", default=True,action="store_true", help="Enable visualization")
     parser.add_argument("--vis-interval", type=int, default=10, help="Visualize every N batches")
     parser.add_argument("--vis-save-path", default="dsec_visualize", help="Save directory")
     args = parser.parse_args()

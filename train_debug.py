@@ -10,7 +10,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 
 from streamingflow.config_debug import get_parser, get_cfg
 from streamingflow.datas.dataloaders import prepare_dataloaders
-from streamingflow.trainer_dsec import TrainingModule
+from streamingflow.trainer_dsec_debug import TrainingModule
 
 
 def get_latest_checkpoint(folder_path):
