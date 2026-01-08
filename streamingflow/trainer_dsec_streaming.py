@@ -172,7 +172,8 @@ class StreamingTrainingModule(BaseTrainingModule):
         _ = _window_idx  # 接口兼容性，当前未使用
 
         # 获取完整的标签（所有窗口共享）
-        full_labels = self.prepare_future_labels(batch)
+        is_detection_mode = getattr(self.cfg, 'DETECTION', None) and getattr(self.cfg.DETECTION, 'ENABLED', False)
+        full_labels = {} if is_detection_mode else self.prepare_future_labels(batch)
 
         window_labels = {}
 
