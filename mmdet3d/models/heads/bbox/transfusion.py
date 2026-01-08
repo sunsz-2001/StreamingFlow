@@ -58,7 +58,7 @@ def _validate_tensor(tensor, name, allow_inf=False):
 class TransFusionHead(nn.Module):
     def __init__(
         self,
-        num_proposals=128,
+        num_proposals=500,
         auxiliary=True,
         in_channels=128 * 3,
         hidden_channel=128,
@@ -915,6 +915,15 @@ class TransFusionHead(nn.Module):
                     ),
                     dict(num_class=1, class_names=["Cyclist"], indices=[2], radius=0.7),
                 ]
+            else:
+                self.tasks = [
+                    dict(num_class=1, class_names=["Car"], indices=[0], radius=0.7),
+                    dict(
+                        num_class=1, class_names=["Pedestrian"], indices=[1], radius=0.7
+                    ),
+                    dict(num_class=1, class_names=["Cyclist"], indices=[2], radius=0.7),
+                ]
+
 
             ret_layer = []
             for i in range(batch_size):

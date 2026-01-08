@@ -193,7 +193,7 @@ class streamingflow(nn.Module):
             encoders = {
                 'lidar': {
                     'voxelize': {
-                        'max_num_points': 10,
+                        'max_num_points': 20,
                         'point_cloud_range': point_cloud_range,
                         'voxel_size': voxel_size,
                         'max_voxels': [90000, 120000],

@@ -123,7 +123,7 @@ class DetectionDecoder(nn.Module):
                 pc_range=pc_range,
                 voxel_size=voxel_size,
                 dataset=cfg.DETECTION.DATASET,
-                nms_type=None,  # 评估时跳过NMS，评估所有预测框
+                nms_type='circle',  # 评估时跳过NMS，评估所有预测框
             ),
             bbox_coder=dict(
                 type='TransFusionBBoxCoder',
