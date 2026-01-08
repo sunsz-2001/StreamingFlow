@@ -136,7 +136,7 @@ class StreamingTrainingModule(BaseTrainingModule):
         event = None
         if use_event:
             event = flow_window['flow_events']
-            if torch.is_tensor(event) and event.dim() == 4:
+            if torch.is_tensor(event) and event.dim() == 5:
                 event = event.unsqueeze(2)  # [B, S, 1, C, H, W]
 
         return {
