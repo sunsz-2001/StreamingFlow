@@ -52,7 +52,10 @@ def process_flow_data(batch, cfg):
 
 
 def gather_batch_outputs(model, batch, device, cfg=None, decode: bool = True) -> Tuple[List, List, Dict]:
-    """Run forward pass and decode predictions."""
+    """Run forward pass and decode predictions.
+
+    遍历所有时间窗口，使用最后一个窗口的输出进行评估。
+    """
     event = None
 
     use_lidar = False
@@ -72,16 +75,63 @@ def gather_batch_outputs(model, batch, device, cfg=None, decode: bool = True) ->
             if 'flow_data' not in batch:
                 raise ValueError("USE_FLOW_DATA is True but batch['flow_data'] is missing.")
             flow_data = process_flow_data(batch, cfg)
-            intrinsics = flow_data[0]['intrinsics']
-            extrinsics = flow_data[0]['extrinsics']
-            camera_timestamps = flow_data[0]['events_stmp']
-            target_timestamp = flow_data[0]['target_timestamp']
-            if use_lidar:
-                points = flow_data[0]['flow_lidar']
-                lidar_timestamp = flow_data[0]['lidar_stmp']
-            event = flow_data[0].get("flow_events")
-            if torch.is_tensor(event) and event.dim() == 5:
-                event = event.unsqueeze(2)  # [B, S, 1, C, H, W]
+
+            def to_device_event(event, device):
+                if event is None:
+                    return None
+                if torch.is_tensor(event):
+                    return event.float().to(device)
+                if isinstance(event, dict) and "frames" in event and torch.is_tensor(event["frames"]):
+                    event = dict(event)
+                    event["frames"] = event["frames"].float().to(device)
+                return event
+
+            def to_device_tensor(data, device):
+                if data is None:
+                    return None
+                if isinstance(data, np.ndarray):
+                    return torch.from_numpy(data).float().to(device)
+                elif isinstance(data, torch.Tensor):
+                    return data.float().to(device)
+                return data
+
+            # 遍历所有时间窗口，使用最后一个窗口的输出
+            output = None
+            for window_data in flow_data:
+                intrinsics = to_device_tensor(window_data['intrinsics'], device)
+                extrinsics = to_device_tensor(window_data['extrinsics'], device)
+                camera_timestamps = to_device_tensor(window_data['events_stmp'], device)
+                target_timestamp = to_device_tensor(window_data['target_timestamp'], device)
+
+                if use_lidar:
+                    points = window_data['flow_lidar']
+                    lidar_timestamp = to_device_tensor(window_data['lidar_stmp'], device)
+
+                event = window_data.get("flow_events")
+                if torch.is_tensor(event) and event.dim() == 5:
+                    event = event.unsqueeze(2)  # [B, S, 1, C, H, W]
+                event = to_device_event(event, device)
+
+                output = model(
+                    batch.get("image"), intrinsics, extrinsics, batch.get("future_egomotion"),
+                    batch.get("padded_voxel_points"), camera_timestamps, points, lidar_timestamp,
+                    target_timestamp, event=event, metas=batch.get("metas"),
+                )
+
+            # 使用最后一个窗口的输出进行评估
+            if not decode:
+                return [], [], output
+
+            decoded = model.decoder.detection_head.get_bboxes(output["detection"], batch["metas"])
+            preds = []
+            for layer_result in decoded:
+                boxes, scores, labels = layer_result
+                preds.append((boxes.tensor.detach().cpu(), scores.detach().cpu(), labels.detach().cpu()))
+
+            gts = []
+            for gt_boxes, gt_labels in zip(batch["gt_bboxes_3d"], batch["gt_labels_3d"]):
+                gts.append((gt_boxes.tensor.cpu(), gt_labels.cpu()))
+            return preds, gts, output
         else:
             points = batch.get("points")
             lidar_timestamp = batch.get("lidar_timestamp")
