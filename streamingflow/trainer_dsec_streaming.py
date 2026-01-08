@@ -121,17 +121,20 @@ class StreamingTrainingModule(BaseTrainingModule):
         lidar_timestamps = flow_window['lidar_stmp']
         target_timestamp = flow_window['target_timestamp']
 
+        use_lidar = getattr(self.cfg.MODEL.MODALITY, 'USE_LIDAR', False)
+        use_event = getattr(self.cfg.MODEL.MODALITY, 'USE_EVENT', False)
+
         # 处理点云
         points = None
         padded_voxel_points = None
-        if self.use_lidar:
+        if use_lidar:
             points = flow_window['flow_lidar']
             if self.cfg.MODEL.LIDAR.USE_STPN or self.cfg.MODEL.LIDAR.USE_BESTI:
                 padded_voxel_points = batch.get('padded_voxel_points')
 
         # 处理事件
         event = None
-        if self.use_event:
+        if use_event:
             event = flow_window['flow_events']
             if torch.is_tensor(event) and event.dim() == 4:
                 event = event.unsqueeze(2)  # [B, S, 1, C, H, W]
