@@ -145,9 +145,9 @@ class StreamingTrainingModule(BaseTrainingModule):
             'extrinsics': extrinsics,
             'future_egomotion': future_egomotion,
             'padded_voxel_points': padded_voxel_points,
-            'camera_timestamps': camera_timestamps,
+            'camera_timestamp': camera_timestamps,  # 单数，匹配模型签名
             'points': points,
-            'lidar_timestamps': lidar_timestamps,
+            'lidar_timestamp': lidar_timestamps,    # 单数，匹配模型签名
             'target_timestamp': target_timestamp,
             'event': event,
             'metas': batch.get('metas'),
@@ -180,7 +180,23 @@ class StreamingTrainingModule(BaseTrainingModule):
         if 'gt_bboxes_3d' in batch:
             window_labels['gt_bboxes_3d'] = batch['gt_bboxes_3d']
         if 'gt_labels_3d' in batch:
-            window_labels['gt_labels_3d'] = batch['gt_labels_3d']
+            # 确保gt_labels_3d是torch.Tensor格式并在正确的device上（复用父类逻辑）
+            gt_labels_3d = batch['gt_labels_3d']
+            if gt_labels_3d is not None:
+                device = next(self.model.parameters()).device
+                converted_labels = []
+                for v in gt_labels_3d:
+                    if v is None:
+                        converted_labels.append(torch.tensor([], dtype=torch.long, device=device))
+                    elif isinstance(v, np.ndarray):
+                        converted_labels.append(torch.from_numpy(v).long().to(device))
+                    elif isinstance(v, torch.Tensor):
+                        converted_labels.append(v.long().to(device))
+                    else:
+                        converted_labels.append(torch.tensor(v, dtype=torch.long, device=device))
+                window_labels['gt_labels_3d'] = converted_labels
+            else:
+                window_labels['gt_labels_3d'] = None
 
         # 分割标签（所有窗口使用相同标签）
         for key in ['segmentation', 'pedestrian', 'hdmap', 'centerness',
