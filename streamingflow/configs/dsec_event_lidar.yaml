@@ -1,7 +1,7 @@
 TAG: 'dsec_event_lidar_eval'  # 训练日志和检查点保存目录名（与 event-only 区分）
 
 # GPUS: [1]
-GPUS: [0,1,2,3]
+GPUS: [2]
 BATCHSIZE: 1
 PRECISION: 32  # 16 或 32，混合精度训练使用 16
 EPOCHS: 50  # 训练轮数
@@ -66,8 +66,8 @@ IMAGE:
 LIFT:
   GT_DEPTH: False
   GEN_DEPTH: False
-  X_BOUND: [0, 51.2, 0.4]  # Forward direction [min, max, resolution]
-  Y_BOUND: [-32, 32, 0.4]  # Side direction [min, max, resolution]
+  X_BOUND: [0, 51.2, 0.8]  # Forward direction [min, max, resolution]
+  Y_BOUND: [-32, 32, 0.8]  # Side direction [min, max, resolution]
   Z_BOUND: [-10.0, 10.0, 20.0]  # Height [min, max, resolution]
   D_BOUND: [2.0, 50.0, 1.0]  # Depth [min, max, resolution]
 

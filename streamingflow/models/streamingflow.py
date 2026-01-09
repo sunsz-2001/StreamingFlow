@@ -629,23 +629,23 @@ class streamingflow(nn.Module):
         if camera_states is not None:
             B, T, C, H, W = camera_states.shape
             # 通道对齐
-            if C != standard_channels:
-                projection_key = f'camera_states_std_projection_{C}_to_{standard_channels}'
-                if not hasattr(self, 'standard_projections'):
-                    self.standard_projections = nn.ModuleDict()
-                if projection_key not in self.standard_projections:
-                    self.standard_projections[projection_key] = nn.Conv2d(C, standard_channels, 1).to(camera_states.device)
-                camera_states = self.standard_projections[projection_key](
-                    camera_states.view(B * T, C, H, W)
-                ).view(B, T, standard_channels, H, W)
+            # if C != standard_channels:
+            #     projection_key = f'camera_states_std_projection_{C}_to_{standard_channels}'
+            #     if not hasattr(self, 'standard_projections'):
+            #         self.standard_projections = nn.ModuleDict()
+            #     if projection_key not in self.standard_projections:
+            #         self.standard_projections[projection_key] = nn.Conv2d(C, standard_channels, 1).to(camera_states.device)
+            #     camera_states = self.standard_projections[projection_key](
+            #         camera_states.view(B * T, C, H, W)
+            #     ).view(B, T, standard_channels, H, W)
             # 空间对齐
-            if (H, W) != standard_spatial_size:
-                camera_states = torch.nn.functional.interpolate(
-                    camera_states.view(B * T, standard_channels, H, W),
-                    size=standard_spatial_size,
-                    mode='bilinear',
-                    align_corners=False
-                ).view(B, T, standard_channels, *standard_spatial_size)
+            # if (H, W) != standard_spatial_size:
+            #     camera_states = torch.nn.functional.interpolate(
+            #         camera_states.view(B * T, standard_channels, H, W),
+            #         size=standard_spatial_size,
+            #         mode='bilinear',
+            #         align_corners=False
+            #     ).view(B, T, standard_channels, *standard_spatial_size)
         
         # 统一 lidar_states 的空间尺寸和通道
         if lidar_states is not None:
@@ -661,13 +661,13 @@ class streamingflow(nn.Module):
                     lidar_states.view(B * T, C, H, W)
                 ).view(B, T, standard_channels, H, W)
             # 空间对齐
-            if (H, W) != standard_spatial_size:
-                lidar_states = torch.nn.functional.interpolate(
-                    lidar_states.view(B * T, standard_channels, H, W),
-                    size=standard_spatial_size,
-                    mode='bilinear',
-                    align_corners=False
-                ).view(B, T, standard_channels, *standard_spatial_size)
+            # if (H, W) != standard_spatial_size:
+            #     lidar_states = torch.nn.functional.interpolate(
+            #         lidar_states.view(B * T, standard_channels, H, W),
+            #         size=standard_spatial_size,
+            #         mode='bilinear',
+            #         align_corners=False
+            #     ).view(B, T, standard_channels, *standard_spatial_size)
 
         if camera_states is not None:
             states = camera_states

@@ -170,16 +170,18 @@ class StreamingTrainingModule(BaseTrainingModule):
             window_labels: 标签字典
         """
         _ = _window_idx  # 接口兼容性，当前未使用
-
+        batchsize = len(batch['gt_bboxes_3d'])
         # 获取完整的标签（所有窗口共享）
         is_detection_mode = getattr(self.cfg, 'DETECTION', None) and getattr(self.cfg.DETECTION, 'ENABLED', False)
         full_labels = {} if is_detection_mode else self.prepare_future_labels(batch)
 
         window_labels = {}
-
+        batch_gt_idx = []
+        for bs in range():
+            batch_gt_idx.append(batch['gt_len'][bs][_window_idx])
         # 检测标签
         if 'gt_bboxes_3d' in batch:
-            window_labels['gt_bboxes_3d'] = batch['gt_bboxes_3d']
+            window_labels['gt_bboxes_3d'] = [batch['gt_bboxes_3d'][i][:1]]
         if 'gt_labels_3d' in batch:
             # 确保gt_labels_3d是torch.Tensor格式并在正确的device上（复用父类逻辑）
             gt_labels_3d = batch['gt_labels_3d']

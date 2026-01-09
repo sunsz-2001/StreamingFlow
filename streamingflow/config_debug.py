@@ -49,7 +49,7 @@ def set_cfg():
     _C.DATASET = CN()
     _C.DATASET.DATAROOT = '/media/switcher/sda/datasets/dsec/'
     _C.DATASET.VERSION = 'trainval'
-    _C.DATASET.NAME = 'nuscenes'
+    _C.DATASET.NAME = 'dsec'
     _C.DATASET.MAP_FOLDER = 'data/nuscenes'
     _C.DATASET.IGNORE_INDEX = 255  # Ignore index when creating flow/offset labels
     _C.DATASET.FILTER_INVISIBLE_VEHICLES = True  # Filter vehicles that are not visible from the cameras

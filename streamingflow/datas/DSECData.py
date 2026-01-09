@@ -1502,7 +1502,7 @@ class DatasetDSEC(torch.utils.data.Dataset):
             interval = self.event_speed//self.num_speed
             
             seq_annos_flow = seq_annos_flow[interval-1::interval]
-            if True:seq_annos_flow = [seq_annos_flow[0]]
+            # if True:seq_annos_flow = [seq_annos_flow[0]]？
             for i in range(len(seq_annos_flow)):
                 annos = seq_annos_flow[i]
                 
