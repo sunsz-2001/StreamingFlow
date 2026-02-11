@@ -5,7 +5,8 @@ from streamingflow.datas.NuscenesData import FuturePredictionDataset
 from lyft_dataset_sdk.lyftdataset import LyftDataset
 from streamingflow.datas.LyftData import FuturePredictionDatasetLyft
 from streamingflow.datas.DSECData import DatasetDSEC
-
+from streamingflow.datas.DSECData_lidar import DatasetDSEC_lidar
+from streamingflow.datas.evwaymo_lidar import DatasetEVWaymo_lidar
 import os
 import numpy as np
 
@@ -178,6 +179,30 @@ def prepare_dataloaders(cfg, return_dataset=False):
     elif cfg.DATASET.NAME == 'dsec':
         traindata = DatasetDSEC(cfg, cfg, is_train=True)
         valdata = DatasetDSEC(cfg, cfg, is_train=False)
+
+        nworkers = cfg.N_WORKERS
+        trainloader = torch.utils.data.DataLoader(
+            traindata, batch_size=cfg.BATCHSIZE, shuffle=True, num_workers=nworkers, 
+            pin_memory=True, drop_last=True, collate_fn=dsec_collate_fn
+        )
+        valloader = torch.utils.data.DataLoader(
+            valdata, batch_size=cfg.BATCHSIZE, shuffle=False, num_workers=nworkers, 
+            pin_memory=True, drop_last=False, collate_fn=dsec_collate_fn)
+    elif cfg.DATASET.NAME == 'dsec_lidar':
+        traindata = DatasetDSEC_lidar(cfg, cfg, is_train=True)
+        valdata = DatasetDSEC_lidar(cfg, cfg, is_train=False)
+
+        nworkers = cfg.N_WORKERS
+        trainloader = torch.utils.data.DataLoader(
+            traindata, batch_size=cfg.BATCHSIZE, shuffle=True, num_workers=nworkers, 
+            pin_memory=True, drop_last=True, collate_fn=dsec_collate_fn
+        )
+        valloader = torch.utils.data.DataLoader(
+            valdata, batch_size=cfg.BATCHSIZE, shuffle=False, num_workers=nworkers, 
+            pin_memory=True, drop_last=False, collate_fn=dsec_collate_fn)
+    elif cfg.DATASET.NAME == 'evwaymo_lidar':
+        traindata = DatasetEVWaymo_lidar(cfg, cfg, is_train=True)
+        valdata = DatasetEVWaymo_lidar(cfg, cfg, is_train=False)
 
         nworkers = cfg.N_WORKERS
         trainloader = torch.utils.data.DataLoader(

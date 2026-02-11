@@ -116,7 +116,6 @@ class DatasetDSEC(torch.utils.data.Dataset):
         self.num_speed = 20
         self.event_speed = 100
 
-        # self.mode = 'train'
         self.mode = 'train' if self.is_train else 'val'
         self.box_type_3d, self.box_mode_3d = get_box_type('LiDAR')
         self.sequence_length = cfg.TIME_RECEPTIVE_FIELD + cfg.N_FUTURE_FRAMES
@@ -125,7 +124,7 @@ class DatasetDSEC(torch.utils.data.Dataset):
         self.scenes = self.get_scenes()
         self.voxel_size = cfg.VOXEL.VOXEL_SIZE
         self.area_extents = np.array(cfg.VOXEL.AREA_EXTENTS)
-        self.event_scale = 1
+        self.event_scale = .5
         self.augmentation_parameters = self.get_resizing_and_cropping_parameters()
 
         self.normalise_image = torchvision.transforms.Compose(
@@ -148,7 +147,6 @@ class DatasetDSEC(torch.utils.data.Dataset):
 
     def get_scenes(self):
 
-        # split_dir = os.path.join(self.dataroot, 'train_test.txt')
         split_dir = os.path.join(self.dataroot, 'detection_' + self.mode + '_sample_new.txt')
         sample_sequence_list = [x.strip() for x in open(split_dir).readlines()]
 
@@ -182,9 +180,7 @@ class DatasetDSEC(torch.utils.data.Dataset):
                     new_info = copy.deepcopy(infos[i])
                     if new_info['sample_idx']!=30:    
                         for n in range(self.num_speed//10):
-                            # if n>0: continue
-                            flow_idx = new_info['flow_list'][n]
-                            self.dataloader_index.append(str(counter)+'_'+str(flow_idx))
+                            self.dataloader_index.append(str(counter)+'_'+str(n))
                     counter+=1
                     event_grid_paths = []
                     event_paths = []
@@ -220,10 +216,7 @@ class DatasetDSEC(torch.utils.data.Dataset):
                 for i in range(len(infos)):
                     new_info = copy.deepcopy(infos[i])
                     if new_info['sample_idx']!=30:
-                        for n in range(self.num_speed//10):
-                            # if n>0: continue
-                            flow_idx = new_info['flow_list'][n]
-                            self.dataloader_index.append(str(counter)+'_'+str(flow_idx))
+                        self.dataloader_index.append(counter)
                     counter+=1
                     event_paths = []
                     event_grid_paths = []
@@ -671,8 +664,6 @@ class DatasetDSEC(torch.utils.data.Dataset):
     def get_label(self, info_dict, instance_map, in_pred):
         """从DSEC数据格式生成BEV分割标签"""
         # 从info_dict中提取数据
-        print('-'*100)
-        print(info_dict['annos'][0]['name'])
         if 'seq_annos' not in info_dict:
             # 如果没有seq_annos，尝试使用原始的annos
             if 'annos' not in info_dict or len(info_dict['annos']) == 0:
@@ -1265,72 +1256,73 @@ class DatasetDSEC(torch.utils.data.Dataset):
             # 如果实际事件数量太少，每个窗口至少分配1个事件
             target_flow_range = 1
         
-        flow_dict = {
-            'flow_events': [],
-            'flow_lidar': [],
-            'events_stmp': [],
-            'lidar_stmp': [],
-        }
-        
-        def get_data(x, y):
-            # 确保访问范围在有效范围内
-            start_idx = max(0, min(x, actual_event_num))
-            end_idx = max(start_idx, min(y, actual_event_num))
+        for target_idx in range(data_split_interval):
+            flow_dict = {
+                'flow_events': [],
+                'flow_lidar': [],
+                'events_stmp': [],
+                'lidar_stmp': [],
+            }
             
-            for event_idx in range(start_idx, end_idx):
-                # 确保索引有效
-                if event_idx >= len(event_grid) or event_idx >= len(evs_stmp):
-                    break
+            def get_data(x, y):
+                # 确保访问范围在有效范围内
+                start_idx = max(0, min(x, actual_event_num))
+                end_idx = max(start_idx, min(y, actual_event_num))
                 
-                # 在第一个事件时添加初始点云（如果启用lidar）
-                if event_idx == 0 and self.use_lidar:
-                    if 'points' in data_dict:
-                        flow_dict['flow_lidar'].append(data_dict['points'])
-                        # normalize lidar timestamp to seconds relative to base_us
-                        flow_dict['lidar_stmp'].append((self.infos[base_idx]['time_stamp'] - base_us) / 1e6)
-                # 如果事件数量足够多（>=10），在第10个事件时添加下一个时间步的点云
-                # 否则在最后一个事件时添加
-                elif event_idx == min(10, actual_event_num - 1) and actual_event_num > 1 and self.use_lidar:
-                    # 确保 base_idx+1 有效
-                    if base_idx + 1 < len(self.infos):
-                        _, points = self.get_infos_and_points([base_idx+1])
-                        flow_dict['flow_lidar'].append(points[0])
-                        # normalize next-frame lidar timestamp to seconds relative to base_us
-                        flow_dict['lidar_stmp'].append((self.infos[base_idx+1]['time_stamp'] - base_us) / 1e6)
-                
-                flow_dict['flow_events'].append(event_grid[event_idx])
-                # Normalize event timestamps to seconds relative to base_us for ODE alignment.
-                event_ts_rel = (evs_stmp[event_idx] - base_us) / 1e6
-                flow_dict['events_stmp'].append(event_ts_rel)
-                
-            flow_dict['target_timestamp'] = flow_dict['events_stmp'][-1:]
-            intrinsics = data_dict['intrinsics']
-            extrinsics = data_dict['extrinsics']
-            n_events = len(flow_dict['events_stmp'])
-            # assume intrinsics/extrinsics are numpy arrays with shape (T, 1, 3, 3) and (T, 1, 4, 4)
-            # take the first time-step and repeat it per event along axis=0 to obtain (n_events, 1, 3, 3)/(n_events, 1, 4, 4)
-            base_intrinsics = intrinsics[0:1]
-            base_extrinsics = extrinsics[0:1]
-            intrinsics = np.repeat(base_intrinsics, n_events, axis=0)
-            extrinsics = np.repeat(base_extrinsics, n_events, axis=0)
-            flow_dict['intrinsics'] = intrinsics
-            flow_dict['extrinsics'] = extrinsics
-        # 计算当前窗口的起始和结束索引
-        start_range = flow_idx+1-target_flow_range
-        end_range = flow_idx+1
+                for event_idx in range(start_idx, end_idx):
+                    # 确保索引有效
+                    if event_idx >= len(event_grid) or event_idx >= len(evs_stmp):
+                        break
+                    
+                    # 在第一个事件时添加初始点云（如果启用lidar）
+                    if event_idx == 0 and self.use_lidar:
+                        if 'points' in data_dict:
+                            flow_dict['flow_lidar'].append(data_dict['points'])
+                            # normalize lidar timestamp to seconds relative to base_us
+                            flow_dict['lidar_stmp'].append((self.infos[base_idx]['time_stamp'] - base_us) / 1e6)
+                    # 如果事件数量足够多（>=10），在第10个事件时添加下一个时间步的点云
+                    # 否则在最后一个事件时添加
+                    elif event_idx == min(10, actual_event_num - 1) and actual_event_num > 1 and self.use_lidar:
+                        # 确保 base_idx+1 有效
+                        if base_idx + 1 < len(self.infos):
+                            _, points = self.get_infos_and_points([base_idx+1])
+                            flow_dict['flow_lidar'].append(points[0])
+                            # normalize next-frame lidar timestamp to seconds relative to base_us
+                            flow_dict['lidar_stmp'].append((self.infos[base_idx+1]['time_stamp'] - base_us) / 1e6)
+                    
+                    flow_dict['flow_events'].append(event_grid[event_idx])
+                    # Normalize event timestamps to seconds relative to base_us for ODE alignment.
+                    event_ts_rel = (evs_stmp[event_idx] - base_us) / 1e6
+                    flow_dict['events_stmp'].append(event_ts_rel)
+                    
+                flow_dict['target_timestamp'] = flow_dict['events_stmp'][-1:]
+                intrinsics = data_dict['intrinsics']
+                extrinsics = data_dict['extrinsics']
+                n_events = len(flow_dict['events_stmp'])
+                # assume intrinsics/extrinsics are numpy arrays with shape (T, 1, 3, 3) and (T, 1, 4, 4)
+                # take the first time-step and repeat it per event along axis=0 to obtain (n_events, 1, 3, 3)/(n_events, 1, 4, 4)
+                base_intrinsics = intrinsics[0:1]
+                base_extrinsics = extrinsics[0:1]
+                intrinsics = np.repeat(base_intrinsics, n_events, axis=0)
+                extrinsics = np.repeat(base_extrinsics, n_events, axis=0)
+                flow_dict['intrinsics'] = intrinsics
+                flow_dict['extrinsics'] = extrinsics
+            # 计算当前窗口的起始和结束索引
+            start_range = target_idx * target_flow_range
+            end_range = (target_idx + 1) * target_flow_range
+            
+            # 处理当前窗口
+            get_data(start_range, end_range)
+            
+            # 如果是最后一个窗口，处理剩余的事件
+            if target_idx + 1 == data_split_interval and end_range < actual_event_num:
+                get_data(end_range, actual_event_num)
+            
+            # 确保至少有一些数据
+            if len(flow_dict['flow_events']) > 0:
+                flow_dict['curr_time_stmp'] = flow_dict['events_stmp'][-1]
+                temp_flow.append(flow_dict)
         
-        # 处理当前窗口
-        get_data(start_range, end_range)
-        
-        # # 如果是最后一个窗口，处理剩余的事件
-        # if target_idx + 1 == data_split_interval and end_range < actual_event_num:
-        #     get_data(end_range, actual_event_num)
-        
-        # 确保至少有一些数据
-        if len(flow_dict['flow_events']) > 0:
-            flow_dict['curr_time_stmp'] = flow_dict['events_stmp'][-1]
-            temp_flow.append(flow_dict)
-    
         # 如果没有任何有效的流数据，返回原始字典
         if len(temp_flow) == 0:
             return data_dict
@@ -1376,12 +1368,11 @@ class DatasetDSEC(torch.utils.data.Dataset):
         
         for i, target_idx in enumerate(target_idx_list):
             if target_idx < len(self.infos):
-                pass
-                # frame_info = self.infos[target_idx]
+                frame_info = self.infos[target_idx]
                 # 为每一帧生成分割标签
-                # seg, inst, instance_map = self.get_label(frame_info, instance_map, in_pred=(i >= self.receptive_field))
-                # segmentation_list.append(seg)
-                # instance_list.append(inst)
+                seg, inst, instance_map = self.get_label(frame_info, instance_map, in_pred=(i >= self.receptive_field))
+                segmentation_list.append(seg)
+                instance_list.append(inst)
             else:
                 # 如果索引超出范围，使用空标签
                 empty_seg = torch.zeros((1, 1, self.bev_dimension[0], self.bev_dimension[1]), dtype=torch.long)
@@ -1469,7 +1460,7 @@ class DatasetDSEC(torch.utils.data.Dataset):
         
         if self.use_event:
             # 加载事件数据，与是否使用图像无关
-            # ev_dict = self.get_events(index, target_idx_list, time_stmp=current_info['time_stamp'])
+            ev_dict = self.get_events(index, target_idx_list, time_stmp=current_info['time_stamp'])
             ev_dict = self.get_events_grid(index, target_idx_list, time_stmp=current_info['time_stamp'])
             input_dict.update(ev_dict)
             event_frames = self._event_grid_to_frames(ev_dict.get('events_grid', []))
@@ -1510,9 +1501,9 @@ class DatasetDSEC(torch.utils.data.Dataset):
             anno_names = []
             gt_obj_ids = []
             seq_annos_flow = current_info['seq_annos']
-            # interval = self.event_speed//self.num_speed
+            interval = self.event_speed//self.num_speed
             
-            seq_annos_flow = [seq_annos_flow[index_flow]]
+            seq_annos_flow = seq_annos_flow[interval-1::interval]
             # if True:seq_annos_flow = [seq_annos_flow[0]]？
             for i in range(len(seq_annos_flow)):
                 annos = seq_annos_flow[i]
@@ -1538,7 +1529,7 @@ class DatasetDSEC(torch.utils.data.Dataset):
                 'gt_len': gt_len,
                 'gt_obj_ids': gt_obj_ids
             })
-        data_dict = self.prepare_data(copy.deepcopy(input_dict))
+        data_dict = self.prepare_data(data_dict=copy.deepcopy(input_dict))
         # 构建检测任务的metas（如果启用检测）
         if getattr(self.cfg, 'DETECTION', None) and getattr(self.cfg.DETECTION, 'ENABLED', False):
             # 计算BEV网格参数
@@ -1674,11 +1665,5 @@ if __name__ == '__main__':
     cfg.MODEL.LIDAR.USE_STPN = False
     cfg.MODEL.LIDAR.USE_BESTI = False
     dsec = DatasetDSEC(data_cfg, cfg, is_train=True)
-    print(len(dsec))
     dat = dsec[0]
-    for n in range(3000):
-        dat = dsec[n]
-        print('gt_names',dat['gt_names'])
-        # if len(dat['gt_names']) > 1:
-        #     print(dat['gt_names'])
     pass

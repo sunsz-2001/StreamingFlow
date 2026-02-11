@@ -10,7 +10,7 @@ from streamingflow.models.event_encoder_evrt import EventEncoderEvRT
 from streamingflow.models.temporal_model import TemporalModelIdentity, TemporalModel
 from streamingflow.models.distributions import DistributionModule
 from streamingflow.models.decoder import Decoder
-from streamingflow.models.detection_decoder import DetectionDecoder
+from streamingflow.models.detection_decoder import DetectionDecoder_CP
 from streamingflow.models.planning_model import Planning
 from streamingflow.utils.network import pack_sequence_dim, unpack_sequence_dim, set_bn_momentum
 from streamingflow.utils.geometry import calculate_birds_eye_view_parameters, VoxelsSumming, pose_vec2mat
@@ -42,7 +42,7 @@ def _validate_tensor(tensor, name, allow_inf=False):
         raise ValueError(f"Inf detected in {name}. Stats: {stats}, shape: {tensor.shape}")
 
 
-class streamingflow(nn.Module):
+class Streamingflow_CP(nn.Module):
     def __init__(self, cfg):
         super().__init__()
         self.cfg = cfg
@@ -155,21 +155,9 @@ class streamingflow(nn.Module):
 
         # Decoder
         if getattr(self.cfg, 'DETECTION', None) and getattr(self.cfg.DETECTION, 'ENABLED', False):
-            self.decoder = DetectionDecoder(self.cfg)
+            self.decoder = DetectionDecoder_CP(self.cfg)
         else:
-            self.decoder = Decoder(
-                in_channels=self.future_pred_in_channels,
-                n_classes=len(self.cfg.SEMANTIC_SEG.VEHICLE.WEIGHTS),
-                n_present=self.receptive_field,
-                n_hdmap=len(self.cfg.SEMANTIC_SEG.HDMAP.ELEMENTS),
-                predict_gate = {
-                    'perceive_hdmap': self.cfg.SEMANTIC_SEG.HDMAP.ENABLED,
-                    'predict_pedestrian': self.cfg.SEMANTIC_SEG.PEDESTRIAN.ENABLED,
-                    'predict_instance': self.cfg.INSTANCE_SEG.ENABLED,
-                    'predict_future_flow': self.cfg.INSTANCE_FLOW.ENABLED,
-                    'planning': self.cfg.PLANNING.ENABLED,
-                }
-            )
+            raise NotImplementedError('Detection decoder is not implemented')
 
         if self.use_lidar:
             voxel_size = [float(v) for v in self.cfg.VOXEL.VOXEL_SIZE]
@@ -646,7 +634,7 @@ class streamingflow(nn.Module):
             bev_sequence = torch.cat([bev_sequence, future_egomotions_spatial], dim=-3)
 
         camera_states = self.temporal_model(bev_sequence)
-        # standard_spatial_size = self.bev_size  # (200, 200) - BEV 网格尺寸
+        standard_spatial_size = self.bev_size  # (200, 200) - BEV 网格尺寸
         standard_channels = self.future_pred_in_channels  # 64
         
         # 统一 camera_states 的空间尺寸和通道
@@ -728,8 +716,7 @@ class streamingflow(nn.Module):
         if self.n_future > 0:
             # past_states = states
             
-            present_state = states.sum(dim=1, keepdim=True).contiguous()
-            # present_state = states[:, -1:].contiguous()
+            present_state = states[:, -1:].contiguous()
             future_prediction_input = present_state 
             camera_states_for_ode = camera_states
             lidar_states_for_ode = lidar_states

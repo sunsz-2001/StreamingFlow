@@ -4,7 +4,7 @@ import numpy as np
 import pytorch_lightning as pl
 
 from streamingflow.config_debug import get_cfg
-from streamingflow.models.streamingflow import streamingflow as streamingflow
+from streamingflow.models.streaming_lidar import streamingflow_lidar as streamingflow
 from streamingflow.losses import SpatialRegressionLoss, SegmentationLoss, HDmapLoss, DepthLoss
 from streamingflow.metrics import IntersectionOverUnion, PanopticMetric, PlanningMetric
 from streamingflow.utils.geometry import cumulative_warp_features_reverse, cumulative_warp_features
@@ -13,7 +13,7 @@ from streamingflow.utils.visualisation import visualise_output
 from streamingflow.utils.data_utils import voxelize_occupy
 
 
-class TrainingModule(pl.LightningModule):
+class TrainingModule_lidar(pl.LightningModule):
     def __init__(self, hparams):
         super().__init__()
 
@@ -38,69 +38,10 @@ class TrainingModule(pl.LightningModule):
 
         self.losses_fn = nn.ModuleDict()
 
-        # # Semantic segmentation
-        # self.losses_fn['segmentation'] = SegmentationLoss(
-        #     class_weights=torch.Tensor(self.cfg.SEMANTIC_SEG.VEHICLE.WEIGHTS),
-        #     use_top_k=self.cfg.SEMANTIC_SEG.VEHICLE.USE_TOP_K,
-        #     top_k_ratio=self.cfg.SEMANTIC_SEG.VEHICLE.TOP_K_RATIO,
-        #     future_discount=self.cfg.FUTURE_DISCOUNT,
-        # )
-        # self.model.segmentation_weight = nn.Parameter(torch.tensor(0.0), requires_grad=True)
+       
         self.metric_vehicle_val = IntersectionOverUnion(self.n_classes)
 
-        # Pedestrian segmentation
-        # if self.cfg.SEMANTIC_SEG.PEDESTRIAN.ENABLED:
-        #     self.losses_fn['pedestrian'] = SegmentationLoss(
-        #         class_weights=torch.Tensor(self.cfg.SEMANTIC_SEG.PEDESTRIAN.WEIGHTS),
-        #         use_top_k=self.cfg.SEMANTIC_SEG.PEDESTRIAN.USE_TOP_K,
-        #         top_k_ratio=self.cfg.SEMANTIC_SEG.PEDESTRIAN.TOP_K_RATIO,
-        #         future_discount=self.cfg.FUTURE_DISCOUNT,
-        #     )
-        #     self.model.pedestrian_weight = nn.Parameter(torch.tensor(0.0), requires_grad=True)
-        #     self.metric_pedestrian_val = IntersectionOverUnion(self.n_classes)
-
-        # HD map
-        # if self.cfg.SEMANTIC_SEG.HDMAP.ENABLED:
-        #     self.losses_fn['hdmap'] = HDmapLoss(
-        #         class_weights=torch.Tensor(self.cfg.SEMANTIC_SEG.HDMAP.WEIGHTS),
-        #         training_weights=self.cfg.SEMANTIC_SEG.HDMAP.TRAIN_WEIGHT,
-        #         use_top_k=self.cfg.SEMANTIC_SEG.HDMAP.USE_TOP_K,
-        #         top_k_ratio=self.cfg.SEMANTIC_SEG.HDMAP.TOP_K_RATIO,
-        #     )
-        #     self.metric_hdmap_val = []
-        #     for i in range(len(self.hdmap_class)):
-        #         self.metric_hdmap_val.append(IntersectionOverUnion(2, absent_score=1))
-        #     self.model.hdmap_weight = nn.Parameter(torch.tensor(0.0), requires_grad=True)
-        #     self.metric_hdmap_val = nn.ModuleList(self.metric_hdmap_val)
-
-        # Depth
-        # if self.cfg.LIFT.GT_DEPTH:
-        #     self.losses_fn['depths'] = DepthLoss()
-        #     self.model.depths_weight = nn.Parameter(torch.tensor(0.0), requires_grad=True)
-
-        # Instance segmentation
-        # if self.cfg.INSTANCE_SEG.ENABLED:
-        #     self.losses_fn['instance_center'] = SpatialRegressionLoss(
-        #         norm=2, future_discount=self.cfg.FUTURE_DISCOUNT
-        #     )
-        #     self.losses_fn['instance_offset'] = SpatialRegressionLoss(
-        #         norm=1, future_discount=self.cfg.FUTURE_DISCOUNT, ignore_index=self.cfg.DATASET.IGNORE_INDEX
-        #     )
-        #     self.model.centerness_weight = nn.Parameter(torch.tensor(0.0), requires_grad=True)
-        #     self.model.offset_weight = nn.Parameter(torch.tensor(0.0), requires_grad=True)
-            # self.metric_panoptic_val = PanopticMetric(n_classes=self.n_classes)
-
-        # Instance flow
-        # if self.cfg.INSTANCE_FLOW.ENABLED:
-        #     self.losses_fn['instance_flow'] = SpatialRegressionLoss(
-        #         norm=1, future_discount=self.cfg.FUTURE_DISCOUNT, ignore_index=self.cfg.DATASET.IGNORE_INDEX
-        #     )
-        #     self.model.flow_weight = nn.Parameter(torch.tensor(0.0), requires_grad=True)
-
-        # # Planning
-        # if self.cfg.PLANNING.ENABLED:
-        #     self.metric_planning_val = PlanningMetric(self.cfg, self.cfg.N_FUTURE_FRAMES)
-        #     self.model.planning_weight = nn.Parameter(torch.tensor(0.0), requires_grad=True)
+        
 
         # Detection
         if getattr(self.cfg, 'DETECTION', None) and getattr(self.cfg.DETECTION, 'ENABLED', False):
@@ -109,90 +50,7 @@ class TrainingModule(pl.LightningModule):
         self.training_step_count = 0
 
     def shared_step(self, batch, is_train):
-        image = batch.get('image')
-        for n in range(len(batch['flow_data'])):
-            if batch['flow_data'][n][0]['events_stmp'][0] <0.05:
-                batch['flow_data'][n][0]['lidar_stmp'] = [.0]
-            elif batch['flow_data'][n][0]['events_stmp'][0] >0.05:
-                batch['flow_data'][n][0]['lidar_stmp'] = [.1]
-                # batch['flow_data'][n][0]['lidar_stmp'] *= .1
-        # print('seq_name', batch['sequence_name'])
-        # print(batch['flow_data'][0][0]['events_stmp'], batch['flow_data'][1][0]['events_stmp'])
-        # print(batch['flow_data'][0][0]['lidar_stmp'],batch['flow_data'][1][0]['lidar_stmp'])
-        flow_data = []
-        flow_batch = batch['flow_data']
-        for flow_frame in range(len(flow_batch[0])):
-            temp_flow_data = {
-            'intrinsics':[],
-            'extrinsics':[],
-            'flow_lidar':[],
-            'flow_events':[],
-            'events_stmp':[],
-            'lidar_stmp':[],
-            'target_timestamp':[],
-            }
-            for bs_idx in range(len(flow_batch)):
-                tmp = flow_batch[bs_idx][flow_frame]
-                
-                for key in temp_flow_data.keys():
-                    if key =='flow_events':
-                        tmp_evs = torch.stack(tmp[key], dim=0)
-                        temp_flow_data[key].append(tmp_evs)
-                    else:
-                        temp_flow_data[key].append(tmp[key])
-            for key in temp_flow_data.keys():
-                if key == 'flow_lidar': pass
-                elif type(temp_flow_data[key][0]) in (np.ndarray,list):
-                    try:temp_flow_data[key] = np.array(temp_flow_data[key])
-                    except:pass
-                elif type(temp_flow_data[key][0]) == torch.Tensor:
-                    temp_flow_data[key] = torch.stack(temp_flow_data[key], dim=0)
-            flow_data.append(temp_flow_data)
-        
-        intrinsics = flow_data[0]['intrinsics']
-        extrinsics = flow_data[0]['extrinsics']
-        camera_timestamps = flow_data[0]['events_stmp']
-        target_timestamp = flow_data[0]['target_timestamp']
-
-        future_egomotion = batch['future_egomotion']
-        # 只在规划任务启用且非lyft数据集时访问这些字段
-        if not self.is_lyft and self.cfg.PLANNING.ENABLED:
-            command = batch.get('command', 'FORWARD')
-            trajs = batch.get('sample_trajectory', None)
-            target_points = batch.get('target_point', None)
-        else:
-            command = None
-            trajs = None
-            target_points = None
-        range_clouds = None
-        radar_pointclouds = None  
-        padded_voxel_points = None
-        lidar_timestamps = None
-        points = None
-        if self.cfg.MODEL.MODALITY.USE_RADAR:
-            radar_pointclouds = batch['radar_pointclouds']
-        if self.cfg.MODEL.MODALITY.USE_LIDAR:
-            points = flow_data[0]['flow_lidar']
-            lidar_timestamps = flow_data[0]['lidar_stmp']
-                
-        
-        # 获取 batch size：优先从 image，否则从 event 或其他可用字段
-        if image is not None:
-            B = len(image)
-        elif self.cfg.MODEL.MODALITY.USE_EVENT and batch.get('event') is not None:
-            event = flow_data[0]['flow_events']
-            if torch.is_tensor(event) and event.dim() == 5:
-                event = event.unsqueeze(2)  # [B, S, 1, C, H, W]
-
-            if torch.is_tensor(event):
-                B = event.shape[0]
-            elif isinstance(event, dict) and 'frames' in event:
-                B = event['frames'].shape[0]
-            else:
-                B = intrinsics[0].shape[0]
-        else:
-            B = intrinsics.shape[0]
-
+        points = batch['points']
         # 提取检测标签（如果启用检测）
         gt_bboxes_3d = None
         gt_labels_3d = None
@@ -200,10 +58,7 @@ class TrainingModule(pl.LightningModule):
         if getattr(self.cfg, 'DETECTION', None) and getattr(self.cfg.DETECTION, 'ENABLED', False):
             gt_bboxes_3d = batch.get('gt_bboxes_3d')
             gt_labels_3d = batch.get('gt_labels_3d')
-            # counter_idx = [0,0]
-            
-            # # for n in range(len(gt_bboxes_3d)):
-            # #     gt_bboxes_3d[n] = gt_bboxes_3d[n][]
+
             metas = batch.get('metas')
             if gt_bboxes_3d is None or gt_labels_3d is None:
                 raise ValueError("DETECTION.ENABLED is True but gt_bboxes_3d or gt_labels_3d is missing in batch")
@@ -231,11 +86,7 @@ class TrainingModule(pl.LightningModule):
         # Forward pass
         # event = batch['event'] if self.cfg.MODEL.MODALITY.USE_EVENT else None
 
-        output = self.model(
-            image, intrinsics, extrinsics, future_egomotion, padded_voxel_points,camera_timestamps, points,lidar_timestamps,target_timestamp,
-            image_hi=batch.get('image_hi'), intrinsics_hi=batch.get('intrinsics_hi'), extrinsics_hi=batch.get('extrinsics_hi'),
-            camera_timestamp_hi=batch.get('camera_timestamp_hi'), event=event, metas=metas
-        )
+        output = self.model(points=points, metas=metas)
 
         #####
         # Loss computation
@@ -319,28 +170,7 @@ class TrainingModule(pl.LightningModule):
                 loss['detection_uncertainty'] = 0.5 * self.model.detection_weight
 
             # Planning
-            if self.cfg.PLANNING.ENABLED:
-                receptive_field = self.model.receptive_field
-                planning_factor = 1 / (2 * torch.exp(self.model.planning_weight))
-                occupancy = torch.logical_or(labels['segmentation'][:, receptive_field:].squeeze(2),
-                                             labels['pedestrian'][:, receptive_field:].squeeze(2))
-                pl_loss, final_traj = self.model.planning(
-                    cam_front=output['cam_front'].detach(),
-                    trajs=trajs[:, :, 1:],
-                    gt_trajs=labels['gt_trajectory'][:, 1:],
-                    cost_volume=output['costvolume'][:, receptive_field:],
-                    semantic_pred=occupancy,
-                    hd_map=labels['hdmap'],
-                    commands=command,
-                    target_points=target_points
-                )
-                loss['planning'] = planning_factor * pl_loss
-                loss['planning_uncertainty'] = 0.5 * self.model.planning_weight
-                output = {**output, 'selected_traj': torch.cat(
-                    [torch.zeros((B, 1, 3), device=final_traj.device), final_traj], dim=1)}
-            else:
-                if 'gt_trajectory' in labels:
-                    output = {**output, 'selected_traj': labels['gt_trajectory']}
+            
 
         # Metrics
         else:
@@ -384,27 +214,7 @@ class TrainingModule(pl.LightningModule):
                                          labels['instance'][:, n_present - 1:])
 
             # planning metric (only if not using detection task)
-            if not is_detection_mode and self.cfg.PLANNING.ENABLED and seg_prediction is not None and pedestrian_prediction is not None:
-                occupancy = torch.logical_or(seg_prediction, pedestrian_prediction)
-                _, final_traj = self.model.planning(
-                    cam_front=output['cam_front'].detach(),
-                    trajs=trajs[:, :, 1:],
-                    gt_trajs=labels['gt_trajectory'][:, 1:],
-                    cost_volume=output['costvolume'][:, n_present:].detach(),
-                    semantic_pred=occupancy[:, n_present:].squeeze(2),
-                    hd_map=output['hdmap'].detach(),
-                    commands=command,
-                    target_points=target_points
-                )
-                occupancy = torch.logical_or(labels['segmentation'][:, n_present:].squeeze(2),
-                                            labels['pedestrian'][:, n_present:].squeeze(2))
-                self.metric_planning_val(final_traj, labels['gt_trajectory'][:, 1:], occupancy)
-                output = {**output,
-                        'selected_traj': torch.cat([torch.zeros((B, 1, 3), device=final_traj.device), final_traj],
-                                                    dim=1)}
-            else:
-                if 'gt_trajectory' in labels:
-                    output = {**output, 'selected_trajectory': labels['gt_trajectory']}
+            
 
         return output, labels, loss
 

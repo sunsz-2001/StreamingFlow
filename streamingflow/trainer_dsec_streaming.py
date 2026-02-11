@@ -10,6 +10,8 @@
 import torch
 import numpy as np
 from streamingflow.trainer_dsec import TrainingModule as BaseTrainingModule
+from mmdet3d.core.bbox import LiDARInstance3DBoxes
+
 
 
 class StreamingTrainingModule(BaseTrainingModule):
@@ -170,37 +172,55 @@ class StreamingTrainingModule(BaseTrainingModule):
             window_labels: 标签字典
         """
         _ = _window_idx  # 接口兼容性，当前未使用
-        batchsize = len(batch['gt_bboxes_3d'])
         # 获取完整的标签（所有窗口共享）
         is_detection_mode = getattr(self.cfg, 'DETECTION', None) and getattr(self.cfg.DETECTION, 'ENABLED', False)
         full_labels = {} if is_detection_mode else self.prepare_future_labels(batch)
 
-        window_labels = {}
-        batch_gt_idx = []
-        for bs in range():
-            batch_gt_idx.append(batch['gt_len'][bs][_window_idx])
-        # 检测标签
-        if 'gt_bboxes_3d' in batch:
-            window_labels['gt_bboxes_3d'] = [batch['gt_bboxes_3d'][i][:1]]
-        if 'gt_labels_3d' in batch:
-            # 确保gt_labels_3d是torch.Tensor格式并在正确的device上（复用父类逻辑）
-            gt_labels_3d = batch['gt_labels_3d']
-            if gt_labels_3d is not None:
-                device = next(self.model.parameters()).device
-                converted_labels = []
-                for v in gt_labels_3d:
-                    if v is None:
-                        converted_labels.append(torch.tensor([], dtype=torch.long, device=device))
-                    elif isinstance(v, np.ndarray):
-                        converted_labels.append(torch.from_numpy(v).long().to(device))
-                    elif isinstance(v, torch.Tensor):
-                        converted_labels.append(v.long().to(device))
-                    else:
-                        converted_labels.append(torch.tensor(v, dtype=torch.long, device=device))
-                window_labels['gt_labels_3d'] = converted_labels
-            else:
-                window_labels['gt_labels_3d'] = None
-
+        # window_labels = {
+        # }
+        # if 'gt_bboxes_3d' in batch:
+        #     window_labels['gt_bboxes_3d']=batch['gt_bboxes_3d']
+        # if 'gt_labels_3d' in batch:
+        #     # 确保gt_labels_3d是torch.Tensor格式并在正确的device上（复用父类逻辑）
+        #     gt_labels_3d = batch['gt_labels_3d']
+        #     if gt_labels_3d is not None:
+        #         device = next(self.model.parameters()).device
+        #         converted_labels = []
+        #         for v in gt_labels_3d:
+        #             if v is None:
+        #                 converted_labels.append(torch.tensor([], dtype=torch.long, device=device))
+        #             elif isinstance(v, np.ndarray):
+        #                 converted_labels.append(torch.from_numpy(v).long().to(device))
+        #             elif isinstance(v, torch.Tensor):
+        #                 converted_labels.append(v.long().to(device))
+        #             else:
+        #                 converted_labels.append(torch.tensor(v, dtype=torch.long, device=device))
+        #         window_labels['gt_labels_3d']=converted_labels
+        #     else:
+        #         window_labels['gt_labels_3d']=None
+        batchsize = len(batch['gt_bboxes_3d'])
+        if _window_idx == 0: gt_start_idx = 0
+        else: gt_start_idx = batch['gt_len']
+        gt_len = batch['gt_len']
+        window_labels = {
+            'gt_bboxes_3d': [],
+            'gt_labels_3d': [],
+        }
+        for bs in range(batchsize):
+            if _window_idx == 0: gt_start_idx = 0
+            else: gt_start_idx = batch['gt_len'][bs][_window_idx-1]
+            gt_len = batch['gt_len'][bs][_window_idx]
+        
+            if 'gt_bboxes_3d' in batch:
+                window_labels['gt_bboxes_3d'].append(batch['gt_bboxes_3d'][bs][gt_start_idx:gt_start_idx+gt_len])
+            if 'gt_labels_3d' in batch:
+                # 确保gt_labels_3d是torch.Tensor格式并在正确的device上（复用父类逻辑）
+                gt_labels_3d = batch['gt_labels_3d'][bs][gt_start_idx:gt_start_idx+gt_len]
+                if gt_labels_3d is not None:
+                    window_labels['gt_labels_3d'].append(gt_labels_3d)
+                else:
+                    window_labels['gt_labels_3d'].append(None)
+        
         # 分割标签（所有窗口使用相同标签）
         for key in ['segmentation', 'pedestrian', 'hdmap', 'centerness',
                     'offset', 'flow', 'depths']:

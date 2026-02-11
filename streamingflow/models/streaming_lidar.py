@@ -42,112 +42,15 @@ def _validate_tensor(tensor, name, allow_inf=False):
         raise ValueError(f"Inf detected in {name}. Stats: {stats}, shape: {tensor.shape}")
 
 
-class streamingflow(nn.Module):
+class streamingflow_lidar(nn.Module):
     def __init__(self, cfg):
         super().__init__()
         self.cfg = cfg
 
-        bev_resolution, bev_start_position, bev_dimension = calculate_birds_eye_view_parameters(
-            self.cfg.LIFT.X_BOUND, self.cfg.LIFT.Y_BOUND, self.cfg.LIFT.Z_BOUND
-        )
-        self.bev_resolution = nn.Parameter(bev_resolution, requires_grad=False)
-        self.bev_start_position = nn.Parameter(bev_start_position, requires_grad=False)
-        self.bev_dimension = nn.Parameter(bev_dimension, requires_grad=False)
-
-        self.encoder_downsample = self.cfg.MODEL.ENCODER.DOWNSAMPLE
         self.encoder_out_channels = self.cfg.MODEL.ENCODER.OUT_CHANNELS
         
-        self.use_radar = self.cfg.MODEL.MODALITY.USE_RADAR
         self.use_lidar = self.cfg.MODEL.MODALITY.USE_LIDAR
-        self.use_camera = self.cfg.MODEL.MODALITY.USE_CAMERA
-        self.use_event = getattr(self.cfg.MODEL.MODALITY, "USE_EVENT", False)
-        self.event_downsample = getattr(self.cfg.MODEL.EVENT, "DOWNSAMPLE", 8)
 
-        self.frustum = self.create_frustum()
-        self.depth_channels, _, _, _ = self.frustum.shape
-        self.discount = self.cfg.LIFT.DISCOUNT
-        self.event_tensorizer = None
-
-        if self.cfg.TIME_RECEPTIVE_FIELD == 1:
-            assert self.cfg.MODEL.TEMPORAL_MODEL.NAME == 'identity'
-
-        self.receptive_field = self.cfg.TIME_RECEPTIVE_FIELD
-        self.n_future = self.cfg.N_FUTURE_FRAMES
-        self.latent_dim = self.cfg.MODEL.DISTRIBUTION.LATENT_DIM
-
-        self.spatial_extent = (self.cfg.LIFT.X_BOUND[1], self.cfg.LIFT.Y_BOUND[1])
-        self.bev_size = (self.bev_dimension[0].item(), self.bev_dimension[1].item())
-
-        self.event_tensorizer = None
-
-        if self.use_camera:
-            self.encoder = Encoder(cfg=self.cfg.MODEL.ENCODER, D=self.depth_channels)
-
-        self.event_encoder = None
-        self.event_channels = 0
-        self.event_fusion_type = getattr(self.cfg.MODEL.EVENT, "FUSION_TYPE", "independent").lower()
-        self.event_bev_fusion = getattr(self.cfg.MODEL.EVENT, "BEV_FUSION", "sum").lower()
-
-        if self.use_event:
-            self.event_encoder = EventEncoderEvRT(
-                cfg=self.cfg.MODEL.EVENT,
-                out_channels=self.encoder_out_channels,
-            )
-            self.event_channels = self.event_encoder.out_channels
-            if self.event_channels != self.encoder_out_channels:
-                raise ValueError(
-                    "Event encoder output channels must match encoder_out_channels for BEV fusion."
-                )
-            if self.event_fusion_type == "concat":
-                self.event_fusion = nn.Linear(
-                    self.encoder_out_channels + self.event_channels,
-                    self.encoder_out_channels,
-                )
-            elif self.event_fusion_type == "residual":
-                init_gate = float(getattr(self.cfg.MODEL.EVENT, "RESIDUAL_INIT", 0.0))
-                self.event_gate = nn.Parameter(
-                    torch.full((self.encoder_out_channels,), init_gate, dtype=torch.float)
-                )
-            elif self.event_fusion_type == "independent":
-                pass
-            else:
-                raise ValueError(f"Unsupported MODEL.EVENT.FUSION_TYPE={self.event_fusion_type}")
-        else:
-            self.event_fusion_type = "none"
-
-        if self.use_camera or self.use_event:
-            temporal_in_channels = self.encoder_out_channels
-            if self.cfg.MODEL.TEMPORAL_MODEL.INPUT_EGOPOSE:
-                temporal_in_channels += 6
-            if self.cfg.MODEL.TEMPORAL_MODEL.NAME == 'identity':
-                self.temporal_model = TemporalModelIdentity(temporal_in_channels, self.receptive_field)
-            elif cfg.MODEL.TEMPORAL_MODEL.NAME == 'temporal_block':
-                self.temporal_model = TemporalModel(
-                    temporal_in_channels,
-                    self.receptive_field,
-                    input_shape=self.bev_size,
-                    start_out_channels=self.cfg.MODEL.TEMPORAL_MODEL.START_OUT_CHANNELS,
-                    extra_in_channels=self.cfg.MODEL.TEMPORAL_MODEL.EXTRA_IN_CHANNELS,
-                    n_spatial_layers_between_temporal_layers=self.cfg.MODEL.TEMPORAL_MODEL.INBETWEEN_LAYERS,
-                    use_pyramid_pooling=self.cfg.MODEL.TEMPORAL_MODEL.PYRAMID_POOLING,
-                )
-        
-            else:
-                raise NotImplementedError(f'Temporal module {self.cfg.MODEL.TEMPORAL_MODEL.NAME}.')
-
-        self.future_pred_in_channels = self.cfg.MODEL.TEMPORAL_MODEL.START_OUT_CHANNELS
-        if self.n_future > 0:
-
-            self.future_prediction_ode = FuturePredictionODE( 
-                in_channels=self.future_pred_in_channels,
-                latent_dim=self.latent_dim,
-                n_future=self.n_future,
-                cfg = self.cfg,
-                mixture=self.cfg.MODEL.FUTURE_PRED.MIXTURE,
-                n_gru_blocks=self.cfg.MODEL.FUTURE_PRED.N_GRU_BLOCKS,
-                n_res_layers=self.cfg.MODEL.FUTURE_PRED.N_RES_LAYERS,
-                delta_t = self.cfg.MODEL.FUTURE_PRED.DELTA_T
-            )
 
 
         self.bev_h = int((self.cfg.LIFT.X_BOUND[1]-self.cfg.LIFT.X_BOUND[0])/self.cfg.LIFT.X_BOUND[2])
@@ -189,7 +92,47 @@ class streamingflow(nn.Module):
             y_size = int(np.floor((y_range / voxel_size[1]) + 0.5))
             z_size = int(np.floor((z_range / voxel_size[2]) + 0.5))
             sparse_shape = [x_size, y_size, z_size]
-
+            # encoders = {
+            #     'lidar': {
+            #         'voxelize': {
+            #             'max_num_points': 20,
+            #             'point_cloud_range': point_cloud_range,
+            #             'voxel_size': voxel_size,
+            #             'max_voxels': [90000, 120000],
+            #         },
+            #         'backbone': {
+            #             'type': 'SparseEncoder',
+            #             'in_channels': 4,
+            #             'sparse_shape': sparse_shape,
+            #             'output_channels': 128,
+            #             'order': ['conv', 'norm', 'act'],
+            #             'encoder_channels': [[16, 16, 32], [32, 32, 64], [64, 64, 128], [128, 128]],
+            #             'encoder_paddings': [[0, 0, 1], [0, 0, 1], [0, 0, [1, 1, 0]], [0, 0]],
+            #             'block_type': 'basicblock',
+            #         },
+            #     },
+            #     # 'temporal_model': {
+            #     #     'type': 'Temporal3DConvModel',
+            #     #     'receptive_field': 3,
+            #     #     'input_egopose': True,
+            #     #     'in_channels': 256,
+            #     #     'input_shape': [128, 128],
+            #     #     'with_skip_connect': True,
+            #     #     'start_out_channels': 256,
+            #     #     'det_grid_conf': {
+            #     #         'xbound': [0, 80, 0.6],
+            #     #         'ybound': [-80, 80, 0.6],
+            #     #         'zbound': [-2, 4, .0],
+            #     #         'dbound': [1.0, 60.0, 1.0],
+            #     #     },
+            #     #     'grid_conf': {
+            #     #         'xbound': [0, 75.2, 0.8],
+            #     #         'ybound': [-75.2, 75.2, 0.8],
+            #     #         'zbound': [-2, 4, 6.0],
+            #     #         'dbound': [1.0, 60.0, 1.0],
+            #     #     },
+            #     # },
+            # }
             encoders = {
                 'lidar': {
                     'voxelize': {
@@ -209,27 +152,27 @@ class streamingflow(nn.Module):
                         'block_type': 'basicblock',
                     },
                 },
-                'temporal_model': {
-                    'type': 'Temporal3DConvModel',
-                    'receptive_field': 3,
-                    'input_egopose': True,
-                    'in_channels': 256,
-                    'input_shape': [128, 128],
-                    'with_skip_connect': True,
-                    'start_out_channels': 256,
-                    'det_grid_conf': {
-                        'xbound': [0, 54.0, 0.6],
-                        'ybound': [-32, 32, 0.6],
-                        'zbound': [-5, 3, .0],
-                        'dbound': [1.0, 60.0, 1.0],
-                    },
-                    'grid_conf': {
-                        'xbound': [0, 51.2, 0.8],
-                        'ybound': [-32, 32, 0.8],
-                        'zbound': [-5, 3, 8.0],
-                        'dbound': [1.0, 60.0, 1.0],
-                    },
-                },
+                # 'temporal_model': {
+                #     'type': 'Temporal3DConvModel',
+                #     'receptive_field': 3,
+                #     'input_egopose': True,
+                #     'in_channels': 256,
+                #     'input_shape': [128, 128],
+                #     'with_skip_connect': True,
+                #     'start_out_channels': 256,
+                #     'det_grid_conf': {
+                #         'xbound': [0, 54.0, 0.6],
+                #         'ybound': [-32, 32, 0.6],
+                #         'zbound': [-5, 3, .0],
+                #         'dbound': [1.0, 60.0, 1.0],
+                #     },
+                #     'grid_conf': {
+                #         'xbound': [0, 51.2, 0.8],
+                #         'ybound': [-32, 32, 0.8],
+                #         'zbound': [-5, 3, 8.0],
+                #         'dbound': [1.0, 60.0, 1.0],
+                #     },
+                # },
             }
 
             self.encoders = nn.ModuleDict()
@@ -268,10 +211,7 @@ class streamingflow(nn.Module):
 
             actual_lidar_output_channels = lidar_backbone_output_channels * z_out
 
-            if self.receptive_field == 1:
-                lidar_start_out_channels = actual_lidar_output_channels
-            else:
-                lidar_start_out_channels = self.cfg.MODEL.TEMPORAL_MODEL.START_OUT_CHANNELS
+
 
             self.lidar_channels = actual_lidar_output_channels
             self.lidar_h = lidar_h
@@ -295,30 +235,6 @@ class streamingflow(nn.Module):
             self.planning = Planning(cfg, self.encoder_out_channels, 6, gru_state_size=self.cfg.PLANNING.GRU_STATE_SIZE)
 
         set_bn_momentum(self, self.cfg.MODEL.BN_MOMENTUM)
-
-    def create_frustum(self):
-        """Create grid in image plane."""
-        event_input_size = getattr(self.cfg.MODEL.EVENT, "INPUT_SIZE", [0, 0])
-        if self.use_event and event_input_size[0] > 0 and event_input_size[1] > 0:
-            h, w = event_input_size
-            downsample = self.event_downsample
-        else:
-            h, w = self.cfg.IMAGE.FINAL_DIM
-            downsample = self.encoder_downsample
-
-        downsampled_h, downsampled_w = h // downsample, w // downsample
-
-        depth_grid = torch.arange(*self.cfg.LIFT.D_BOUND, dtype=torch.float)# 1-49
-        depth_grid = depth_grid.view(-1, 1, 1).expand(-1, downsampled_h, downsampled_w)
-        n_depth_slices = depth_grid.shape[0]
-
-        x_grid = torch.linspace(0, w - 1, downsampled_w, dtype=torch.float)
-        x_grid = x_grid.view(1, 1, downsampled_w).expand(n_depth_slices, downsampled_h, downsampled_w)
-        y_grid = torch.linspace(0, h - 1, downsampled_h, dtype=torch.float)
-        y_grid = y_grid.view(1, downsampled_h, 1).expand(n_depth_slices, downsampled_h, downsampled_w)
-
-        frustum = torch.stack((x_grid, y_grid, depth_grid), -1)
-        return nn.Parameter(frustum, requires_grad=False)
     
     @torch.no_grad()
     @force_fp32()
@@ -403,11 +319,8 @@ class streamingflow(nn.Module):
         except RuntimeError as e:
             raise
 
-    def extract_lidar_features_time_series(self, points, device, T=None):
+    def extract_lidar_features_time_series(self, points, device):
         """Extract LiDAR features for time series data. Returns [B, T, C, H, W]."""
-        if T is None:
-            T = self.receptive_field
-
         if torch.is_tensor(points) or isinstance(points, np.ndarray):
             pts_batch = [[torch.from_numpy(points).to(dtype=torch.float32)] if isinstance(points, np.ndarray) else [points.to(dtype=torch.float32)]]
         elif isinstance(points, (list, tuple)) and len(points) > 0 and not isinstance(points[0], (list, tuple)):
@@ -463,14 +376,8 @@ class streamingflow(nn.Module):
         # x = torch.stack(features, dim=1)
         return features
 
-    def forward(self, image, intrinsics, extrinsics, future_egomotion, padded_voxel_points=None, camera_timestamp=None, points=None,lidar_timestamp=None, target_timestamp=None,
-                image_hi=None, intrinsics_hi=None, extrinsics_hi=None, camera_timestamp_hi=None, event=None, metas=None):
+    def forward(self, points=None, metas=None):
         output = {}
-
-        future_egomotion = future_egomotion[:, :self.receptive_field].contiguous()
-        camera_states = None
-        lidar_voxel_states = None
-        lidar_states = None
 
         if self.use_lidar:
             if isinstance(points, list) and len(points) > 0:
@@ -527,11 +434,10 @@ class streamingflow(nn.Module):
                 raise TypeError(
                     f"Expected points to be list[Tensor], list[list[Tensor]], or Tensor, but got {type(points)}"
                 )
-            T = self.receptive_field
             
             first_point = points[0]
             if isinstance(first_point, list):
-                x = self.extract_lidar_features_time_series(points, intrinsics.device,T=T)  # [B, T, C, H, W]
+                x = self.extract_lidar_features_time_series(points, first_point[0].device)  # [B, T, C, H, W]
             else:
                 B = len(points)
                 # voxelize + 稀疏卷积编码，返回 [B, C, H_det, W_det]
@@ -541,266 +447,12 @@ class streamingflow(nn.Module):
 
             lidar_states = self.temporal_model_lidar(x)
 
-        if not self.use_camera and not self.use_event:
-            raise ValueError("At least one of USE_CAMERA or USE_EVENT must be True.")
 
-        intrinsics_rf = intrinsics[:, :self.receptive_field].contiguous()
-        extrinsics_rf = extrinsics[:, :self.receptive_field].contiguous()
-
-        image_rf = None
-        if self.use_camera:
-            if image is None:
-                raise ValueError("USE_CAMERA is True but no image input was provided to forward().")
-            image_rf = image[:, :self.receptive_field].contiguous()
-
-        event_in = None
-        if self.use_event:
-            if event is None:
-                raise ValueError("USE_EVENT is True but no event input was provided to forward().")
-            if torch.is_tensor(event):
-                event_in = event[:, :self.receptive_field].contiguous()
-            elif isinstance(event, dict) and "frames" in event and torch.is_tensor(event["frames"]):
-                event_in = dict(event)
-                event_in["frames"] = event["frames"][:, :self.receptive_field].contiguous()
-            else:
-                event_in = event
-
-        # Ensure future_egomotion has same temporal length as intrinsics (s)
-        # so downstream projection_to_birds_eye_view indexing won't go out of bounds.
-        # If future_egomotion has fewer timesteps, repeat the last one; if more, truncate.
-        try:
-            s = intrinsics_rf.shape[1]
-            if future_egomotion is None:
-                future_egomotion = torch.zeros((intrinsics_rf.shape[0], s, 6), device=intrinsics_rf.device, dtype=torch.float32)
-            else:
-                if isinstance(future_egomotion, np.ndarray):
-                    future_egomotion = torch.from_numpy(future_egomotion)
-                if future_egomotion.dim() == 2:
-                    future_egomotion = future_egomotion.unsqueeze(1)
-                future_egomotion = future_egomotion.to(device=intrinsics_rf.device, dtype=torch.float32)
-                cur_s = future_egomotion.shape[1]
-                if cur_s < s:
-                    last = future_egomotion[:, -1:, :].expand(future_egomotion.shape[0], s - cur_s, 6)
-                    future_egomotion = torch.cat([future_egomotion, last], dim=1)
-                elif cur_s > s:
-                    future_egomotion = future_egomotion[:, :s, :].contiguous()
-        except Exception:
-            # Fallback: ensure shape is at least (B, s, 6)
-            try:
-                future_egomotion = future_egomotion.to(device=intrinsics_rf.device, dtype=torch.float32)
-            except Exception:
-                future_egomotion = torch.zeros((intrinsics_rf.shape[0], intrinsics_rf.shape[1], 6), device=intrinsics_rf.device, dtype=torch.float32)
-
-        modality_outputs = self.calculate_birds_eye_view_features(
-            intrinsics_rf,
-            extrinsics_rf,
-            future_egomotion,
-            image=image_rf,
-            event=event_in,
-        )
-
-        camera_data = modality_outputs.get("camera")
-        event_data = modality_outputs.get("event")
-
-        bev_sequence = None
-        if camera_data is not None:
-            bev_sequence = camera_data["bev"]
-            output["depth_prediction"] = camera_data["depth"]
-            if camera_data["cam_front"] is not None:
-                output["cam_front"] = camera_data["cam_front"]
-
-        if event_data is not None:
-            output["event_depth_prediction"] = event_data["depth"]
-            if "depth_prediction" not in output:
-                output["depth_prediction"] = event_data["depth"]
-            if bev_sequence is None:
-                bev_sequence = event_data["bev"]
-            else:
-                if self.event_bev_fusion == "sum":
-                    bev_sequence = bev_sequence + event_data["bev"]
-                elif self.event_bev_fusion == "avg":
-                    bev_sequence = 0.5 * (bev_sequence + event_data["bev"])
-                else:
-                    raise ValueError(f"Unsupported MODEL.EVENT.BEV_FUSION={self.event_bev_fusion}")
-
-            # Check bev_sequence for NaN/Inf after event fusion
-            if torch.isnan(bev_sequence).any() or torch.isinf(bev_sequence).any():
-                bev_sequence = torch.where(
-                    torch.isnan(bev_sequence) | torch.isinf(bev_sequence),
-                    torch.zeros_like(bev_sequence),
-                    bev_sequence
-                )
-
-        if bev_sequence is None:
-            raise RuntimeError("Failed to compute BEV features from available modalities.")
-
-        if self.cfg.MODEL.TEMPORAL_MODEL.INPUT_EGOPOSE:
-            b, s, c = future_egomotion.shape
-            h, w = bev_sequence.shape[-2:]
-            future_egomotions_spatial = future_egomotion.view(b, s, c, 1, 1).expand(b, s, c, h, w)
-            future_egomotions_spatial = torch.cat(
-                [torch.zeros_like(future_egomotions_spatial[:, :1]),
-                 future_egomotions_spatial[:, :(self.receptive_field - 1)]],
-                dim=1,
-            )
-            bev_sequence = torch.cat([bev_sequence, future_egomotions_spatial], dim=-3)
-
-        camera_states = self.temporal_model(bev_sequence)
-        # standard_spatial_size = self.bev_size  # (200, 200) - BEV 网格尺寸
-        standard_channels = self.future_pred_in_channels  # 64
-        
-        # 统一 camera_states 的空间尺寸和通道
-        # if camera_states is not None:
-        #     B, T, C, H, W = camera_states.shape
-            # 通道对齐
-            # if C != standard_channels:
-            #     projection_key = f'camera_states_std_projection_{C}_to_{standard_channels}'
-            #     if not hasattr(self, 'standard_projections'):
-            #         self.standard_projections = nn.ModuleDict()
-            #     if projection_key not in self.standard_projections:
-            #         self.standard_projections[projection_key] = nn.Conv2d(C, standard_channels, 1).to(camera_states.device)
-            #     camera_states = self.standard_projections[projection_key](
-            #         camera_states.view(B * T, C, H, W)
-            #     ).view(B, T, standard_channels, H, W)
-            # 空间对齐
-            # if (H, W) != standard_spatial_size:
-            #     camera_states = torch.nn.functional.interpolate(
-            #         camera_states.view(B * T, standard_channels, H, W),
-            #         size=standard_spatial_size,
-            #         mode='bilinear',
-            #         align_corners=False
-            #     ).view(B, T, standard_channels, *standard_spatial_size)
-        
-        # 统一 lidar_states 的空间尺寸和通道
-        if len(lidar_states)!=0:
-            new_lidar_states = []
-            for lidar_state in lidar_states:
-                if len(lidar_state)!=0:
-                    B, C, H, W = lidar_state.shape
-                    # 通道对齐
-                    # if C != standard_channels:
-                    projection_key = f'lidar_states_std_projection_{C}_to_{standard_channels}'
-                    # if not hasattr(self, 'standard_projections'):
-                        # self.standard_projections = nn.ModuleDict()
-                    # if projection_key not in self.standard_projections:
-                        # self.standard_projections[projection_key] = nn.Conv2d(C, standard_channels, 1).to(lidar_states.device)
-                    lidar_state = self.standard_projections[projection_key](lidar_state)
-                new_lidar_states.append(lidar_state)
-            lidar_states = new_lidar_states
-            # 空间对齐
-            # if (H, W) != standard_spatial_size:
-            #     lidar_states = torch.nn.functional.interpolate(
-            #         lidar_states.view(B * T, standard_channels, H, W),
-            #         size=standard_spatial_size,
-            #         mode='bilinear',
-            #         align_corners=False
-            #     ).view(B, T, standard_channels, *standard_spatial_size)
-
-        if camera_states is not None:
-            states = camera_states
-        elif lidar_states is not None:
-            states = lidar_states
-        else:
-            raise RuntimeError("Both camera_states and lidar_states are None. At least one modality must be available.")
-
-        # Optional: build high-frequency camera states (single-frame lifting as ODE observations)
-        camera_states_hi = None
-        if self.use_camera and image_hi is not None and intrinsics_hi is not None and extrinsics_hi is not None and camera_timestamp_hi is not None:
-            # Accept either [S_cam,N,3,H,W] or [B,S_cam,N,3,H,W]
-            if image_hi.dim() == 5:
-                image_hi_b = image_hi.unsqueeze(0)
-                intrinsics_hi_b = intrinsics_hi.unsqueeze(0)
-                extrinsics_hi_b = extrinsics_hi.unsqueeze(0)
-            else:
-                image_hi_b = image_hi
-                intrinsics_hi_b = intrinsics_hi
-                extrinsics_hi_b = extrinsics_hi
-
-            b, S_cam = image_hi_b.shape[0], image_hi_b.shape[1]
-            zeros_ego = torch.zeros((b, S_cam, 6), device=image_hi_b.device, dtype=image_hi_b.dtype)
-            hi_outputs = self.calculate_birds_eye_view_features(
-                intrinsics_hi_b, extrinsics_hi_b, zeros_ego, image=image_hi_b
-            )
-            camera_states_hi = None
-            if "camera" in hi_outputs:
-                camera_states_hi = hi_outputs["camera"]["bev"].contiguous()  # [B, S_cam, C, H, W]
-
-        if self.n_future > 0:
-            # past_states = states
-            
-            present_state = states.sum(dim=1, keepdim=True).contiguous()
-            # present_state = states[:, -1:].contiguous()
-            future_prediction_input = present_state 
-            camera_states_for_ode = camera_states
-            lidar_states_for_ode = lidar_states
-            camera_timestamp_ode = camera_timestamp
-            # camera_timestamp_ode = camera_timestamp[:, :self.receptive_field] if camera_timestamp is not None else None
-            lidar_timestamp_ode = lidar_timestamp
-            # lidar_timestamp_ode = lidar_timestamp[:, :self.receptive_field] if lidar_timestamp is not None else None
-
-            future_states, auxilary_loss = self.future_prediction_ode(
-                future_prediction_input,
-                camera_states_for_ode,
-                lidar_states_for_ode,
-                camera_timestamp_ode,
-                lidar_timestamp_ode,
-                target_timestamp,
-                camera_states_hi=camera_states_hi,
-                camera_timestamp_hi=camera_timestamp_hi,
-            )
-            
-            # past_states_channels = past_states.shape[2]
-            # future_states_channels = future_states.shape[2]
-            # past_states_spatial = (past_states.shape[3], past_states.shape[4])
-            # future_states_spatial = (future_states.shape[3], future_states.shape[4])
-            
-            # if past_states_spatial != future_states_spatial:
-            #     B_fut, T_fut, C_fut, H_fut, W_fut = future_states.shape
-            #     future_states = torch.nn.functional.interpolate(
-            #         future_states.view(B_fut * T_fut, C_fut, H_fut, W_fut),
-            #         size=past_states_spatial,
-            #         mode='bilinear',
-            #         align_corners=False
-            #     ).view(B_fut, T_fut, C_fut, *past_states_spatial)
-
-            # if past_states_channels != future_states_channels:
-            #     projection_key = f'past_states_projection_{past_states_channels}_to_{future_states_channels}'
-            #     if not hasattr(self, 'past_states_projections'):
-            #         # 初始化投影层字典
-            #         self.past_states_projections = nn.ModuleDict()
-                
-            #     if projection_key not in self.past_states_projections:
-            #         projection = nn.Conv2d(
-            #             past_states_channels,
-            #             future_states_channels,
-            #             kernel_size=1,
-            #             bias=False
-            #         )
-            #         nn.init.xavier_uniform_(projection.weight)
-            #         self.past_states_projections[projection_key] = projection
-                
-            #     # 投影 past_states: [B, T, C_old, H, W] -> [B, T, C_new, H, W]
-            #     B, T, C_old, H, W = past_states.shape
-            #     past_states_reshaped = past_states.view(B * T, C_old, H, W)
-            #     past_states_projected = self.past_states_projections[projection_key](past_states_reshaped)
-            #     past_states = past_states_projected.view(B, T, future_states_channels, H, W)
-            states = future_states.squeeze(1)
-    
-            # predict BEV outputs
-            # Check states before passing to decoder
-            # _validate_tensor(states, "states before decoder (with temporal model)")
-            bev_output = self.decoder(states, metas)
-
-        else:
-            # Perceive BEV outputs
-            # Check states before passing to decoder
-            # _validate_tensor(states, "states before decoder (without temporal model)")
-            bev_output = self.decoder(states, metas)
+        lidar_states = torch.cat(lidar_states, dim=0)
+        bev_output = self.decoder(lidar_states, metas)
 
         output = {**output, **bev_output}
-        output["event_bev"] = event_data["bev"] if event_data is not None else None
         output["lidar_states"] = lidar_states
-        output["camera_states"] = camera_states
 
         return output
 

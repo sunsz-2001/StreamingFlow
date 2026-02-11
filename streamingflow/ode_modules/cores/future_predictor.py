@@ -107,15 +107,20 @@ class FuturePredictionODE(nn.Module):
                 for index in range(camera_timestamp.shape[1]):
                     # 获取原始绝对时间戳
                     ts_raw = camera_timestamp[bs, index].item() if torch.is_tensor(camera_timestamp[bs, index]) else float(camera_timestamp[bs, index])
-                    # 转换为相对秒：(t - t0) * 1e-6
+                   # 转换为相对秒：(t - t0) * 1e-6
                     ts_rel = (ts_raw - t0) * TIME_SCALE
                     obs_feature_with_time[ts_rel] = camera_states[bs, index].unsqueeze(0)
             
-            if lidar_states is not None:
-                for index in range(lidar_timestamp.shape[1]):
-                    ts_raw = lidar_timestamp[bs, index].item() if torch.is_tensor(lidar_timestamp[bs, index]) else float(lidar_timestamp[bs, index])
+            # if lidar_states is not None:
+            #     for index in range(lidar_timestamp.shape[1]):
+            #         ts_raw = lidar_timestamp[bs, index].item() if torch.is_tensor(lidar_timestamp[bs, index]) else float(lidar_timestamp[bs, index])
+            #         ts_rel = (ts_raw - t0) * TIME_SCALE
+            #         obs_feature_with_time[ts_rel] = lidar_states[bs, index].unsqueeze(0)
+            if len(lidar_states)!=0:
+                for index,stmp_bs in enumerate(lidar_timestamp[bs]):
+                    ts_raw = stmp_bs.item() if torch.is_tensor(stmp_bs) else float(stmp_bs)
                     ts_rel = (ts_raw - t0) * TIME_SCALE
-                    obs_feature_with_time[ts_rel] = lidar_states[bs, index].unsqueeze(0)
+                    obs_feature_with_time[ts_rel] = lidar_states[-1]
             
             if camera_states_hi is not None and camera_timestamp_hi is not None:
                 for index in range(camera_timestamp_hi.shape[1]):

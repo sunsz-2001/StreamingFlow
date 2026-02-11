@@ -276,10 +276,7 @@ class streamingflow(nn.Module):
             self.lidar_channels = actual_lidar_output_channels
             self.lidar_h = lidar_h
             self.lidar_w = lidar_w
-            projection_key = f'lidar_states_std_projection_{128}_to_{64}'
-            self.standard_projections = nn.ModuleDict()
-                    # if projection_key not in self.standard_projections:
-            self.standard_projections[projection_key] = nn.Conv2d(128, 64, 1)
+
             # self.temporal_model_lidar = TemporalModel(
             #     actual_lidar_output_channels,
             #     self.receptive_field,
@@ -384,8 +381,7 @@ class streamingflow(nn.Module):
             batch_size = len(x)
             
         feats, coords, sizes = self.voxelize(x)
-        # save_cuda_tensor_as_npz(coords[:,1:], 'coor')
-        # print('coor', coords[:,0].max(),coords[:,1].max(),coords[:,2].max(),)
+
         if coords.numel() == 0:
             # print("[WARNING] Empty coords, returning empty tensor")
             return torch.zeros((batch_size, self.lidar_channels, self.lidar_h, self.lidar_w),
@@ -437,31 +433,23 @@ class streamingflow(nn.Module):
         B = len(pts_batch)
         features = []
 
-        # for t in range(T):
-        # pts_t = []
-        for s in range(B):
-            sample_pts = pts_batch[s]
-            # if t < len(sample_pts):
-            #     p = sample_pts[t]
-            # elif len(sample_pts)==0:
-            #     p = torch.tensor([]).to(device)
-            # else:
-            if len(sample_pts)!=0:
-                p = [sample_pts[-1]]
-                # print(p[0][:,0].max(),p[0][:,1].max())
-                
-                # pts_t.append(p.to(dtype=torch.float32))
+        for t in range(T):
+            pts_t = []
+            for s in range(B):
+                sample_pts = pts_batch[s]
+                if t < len(sample_pts):
+                    p = sample_pts[t]
+                elif len(sample_pts)==0:
+                    p = torch.tensor([]).to(device)
+                else:
+                    p = sample_pts[-1]
+                pts_t.append(p.to(dtype=torch.float32))
 
-                feat_t = self.extract_lidar_features(p, batch_size=1)
-                features.append(feat_t)
-            else:
-                # feat_t = None
-                pass
-            # pts_t.append()
-            
+            feat_t = self.extract_lidar_features(pts_t, batch_size=B)
+            features.append(feat_t)
 
-        # x = torch.stack(features, dim=1)
-        return features
+        x = torch.stack(features, dim=1)
+        return x
 
     def forward(self, image, intrinsics, extrinsics, future_egomotion, padded_voxel_points=None, camera_timestamp=None, points=None,lidar_timestamp=None, target_timestamp=None,
                 image_hi=None, intrinsics_hi=None, extrinsics_hi=None, camera_timestamp_hi=None, event=None, metas=None):
@@ -646,12 +634,12 @@ class streamingflow(nn.Module):
             bev_sequence = torch.cat([bev_sequence, future_egomotions_spatial], dim=-3)
 
         camera_states = self.temporal_model(bev_sequence)
-        # standard_spatial_size = self.bev_size  # (200, 200) - BEV 网格尺寸
+        standard_spatial_size = self.bev_size  # (200, 200) - BEV 网格尺寸
         standard_channels = self.future_pred_in_channels  # 64
         
         # 统一 camera_states 的空间尺寸和通道
-        # if camera_states is not None:
-        #     B, T, C, H, W = camera_states.shape
+        if camera_states is not None:
+            B, T, C, H, W = camera_states.shape
             # 通道对齐
             # if C != standard_channels:
             #     projection_key = f'camera_states_std_projection_{C}_to_{standard_channels}'
@@ -672,21 +660,18 @@ class streamingflow(nn.Module):
             #     ).view(B, T, standard_channels, *standard_spatial_size)
         
         # 统一 lidar_states 的空间尺寸和通道
-        if len(lidar_states)!=0:
-            new_lidar_states = []
-            for lidar_state in lidar_states:
-                if len(lidar_state)!=0:
-                    B, C, H, W = lidar_state.shape
-                    # 通道对齐
-                    # if C != standard_channels:
-                    projection_key = f'lidar_states_std_projection_{C}_to_{standard_channels}'
-                    # if not hasattr(self, 'standard_projections'):
-                        # self.standard_projections = nn.ModuleDict()
-                    # if projection_key not in self.standard_projections:
-                        # self.standard_projections[projection_key] = nn.Conv2d(C, standard_channels, 1).to(lidar_states.device)
-                    lidar_state = self.standard_projections[projection_key](lidar_state)
-                new_lidar_states.append(lidar_state)
-            lidar_states = new_lidar_states
+        if lidar_states is not None:
+            B, T, C, H, W = lidar_states.shape
+            # 通道对齐
+            if C != standard_channels:
+                projection_key = f'lidar_states_std_projection_{C}_to_{standard_channels}'
+                if not hasattr(self, 'standard_projections'):
+                    self.standard_projections = nn.ModuleDict()
+                if projection_key not in self.standard_projections:
+                    self.standard_projections[projection_key] = nn.Conv2d(C, standard_channels, 1).to(lidar_states.device)
+                lidar_states = self.standard_projections[projection_key](
+                    lidar_states.view(B * T, C, H, W)
+                ).view(B, T, standard_channels, H, W)
             # 空间对齐
             # if (H, W) != standard_spatial_size:
             #     lidar_states = torch.nn.functional.interpolate(
@@ -726,10 +711,9 @@ class streamingflow(nn.Module):
                 camera_states_hi = hi_outputs["camera"]["bev"].contiguous()  # [B, S_cam, C, H, W]
 
         if self.n_future > 0:
-            # past_states = states
+            past_states = states
             
-            present_state = states.sum(dim=1, keepdim=True).contiguous()
-            # present_state = states[:, -1:].contiguous()
+            present_state = states[:, -1:].contiguous()
             future_prediction_input = present_state 
             camera_states_for_ode = camera_states
             lidar_states_for_ode = lidar_states
@@ -749,41 +733,41 @@ class streamingflow(nn.Module):
                 camera_timestamp_hi=camera_timestamp_hi,
             )
             
-            # past_states_channels = past_states.shape[2]
-            # future_states_channels = future_states.shape[2]
-            # past_states_spatial = (past_states.shape[3], past_states.shape[4])
-            # future_states_spatial = (future_states.shape[3], future_states.shape[4])
+            past_states_channels = past_states.shape[2]
+            future_states_channels = future_states.shape[2]
+            past_states_spatial = (past_states.shape[3], past_states.shape[4])
+            future_states_spatial = (future_states.shape[3], future_states.shape[4])
             
-            # if past_states_spatial != future_states_spatial:
-            #     B_fut, T_fut, C_fut, H_fut, W_fut = future_states.shape
-            #     future_states = torch.nn.functional.interpolate(
-            #         future_states.view(B_fut * T_fut, C_fut, H_fut, W_fut),
-            #         size=past_states_spatial,
-            #         mode='bilinear',
-            #         align_corners=False
-            #     ).view(B_fut, T_fut, C_fut, *past_states_spatial)
+            if past_states_spatial != future_states_spatial:
+                B_fut, T_fut, C_fut, H_fut, W_fut = future_states.shape
+                future_states = torch.nn.functional.interpolate(
+                    future_states.view(B_fut * T_fut, C_fut, H_fut, W_fut),
+                    size=past_states_spatial,
+                    mode='bilinear',
+                    align_corners=False
+                ).view(B_fut, T_fut, C_fut, *past_states_spatial)
 
-            # if past_states_channels != future_states_channels:
-            #     projection_key = f'past_states_projection_{past_states_channels}_to_{future_states_channels}'
-            #     if not hasattr(self, 'past_states_projections'):
-            #         # 初始化投影层字典
-            #         self.past_states_projections = nn.ModuleDict()
+            if past_states_channels != future_states_channels:
+                projection_key = f'past_states_projection_{past_states_channels}_to_{future_states_channels}'
+                if not hasattr(self, 'past_states_projections'):
+                    # 初始化投影层字典
+                    self.past_states_projections = nn.ModuleDict()
                 
-            #     if projection_key not in self.past_states_projections:
-            #         projection = nn.Conv2d(
-            #             past_states_channels,
-            #             future_states_channels,
-            #             kernel_size=1,
-            #             bias=False
-            #         )
-            #         nn.init.xavier_uniform_(projection.weight)
-            #         self.past_states_projections[projection_key] = projection
+                if projection_key not in self.past_states_projections:
+                    projection = nn.Conv2d(
+                        past_states_channels,
+                        future_states_channels,
+                        kernel_size=1,
+                        bias=False
+                    )
+                    nn.init.xavier_uniform_(projection.weight)
+                    self.past_states_projections[projection_key] = projection
                 
-            #     # 投影 past_states: [B, T, C_old, H, W] -> [B, T, C_new, H, W]
-            #     B, T, C_old, H, W = past_states.shape
-            #     past_states_reshaped = past_states.view(B * T, C_old, H, W)
-            #     past_states_projected = self.past_states_projections[projection_key](past_states_reshaped)
-            #     past_states = past_states_projected.view(B, T, future_states_channels, H, W)
+                # 投影 past_states: [B, T, C_old, H, W] -> [B, T, C_new, H, W]
+                B, T, C_old, H, W = past_states.shape
+                past_states_reshaped = past_states.view(B * T, C_old, H, W)
+                past_states_projected = self.past_states_projections[projection_key](past_states_reshaped)
+                past_states = past_states_projected.view(B, T, future_states_channels, H, W)
             states = future_states.squeeze(1)
     
             # predict BEV outputs
@@ -810,23 +794,19 @@ class streamingflow(nn.Module):
         # Ensure intrinsics and extrinsics are float32 to match frustum dtype
         intrinsics = intrinsics.float()
         extrinsics = extrinsics.float()
-        extrinsics = torch.inverse(extrinsics)
-
+        
         rotation, translation = extrinsics[..., :3, :3], extrinsics[..., :3, 3]
         B, N, _ = translation.shape
         # Add batch, camera dimension, and a dummy dimension at the end
         points = self.frustum.unsqueeze(0).unsqueeze(0).unsqueeze(-1)
-        # save_cuda_tensor_as_npz(points[0].view(-1,3))
-        
+
         # Camera to ego reference frame
         points = torch.cat((points[:, :, :, :, :, :2] * points[:, :, :, :, :, 2:3], points[:, :, :, :, :, 2:3]), 5)
         combined_transformation = rotation.matmul(torch.inverse(intrinsics))
         points = combined_transformation.view(B, N, 1, 1, 1, 3, 3).matmul(points).squeeze(-1)
         points += translation.view(B, N, 1, 1, 1, 3)
-        # print('pmin',points[...,0].min(),points[...,1].min())
-        # print('pmax',points[...,0].max(),points[...,1].max())
-        
-        # points = points[...,[1,0,2]]
+        # points[...,0]-=points[...,0].min()
+        # points[...,1]-=points[...,1].min()
         # The 3 dimensions in the ego reference frame are: (forward, sides, height)
         return points
 
@@ -1003,12 +983,8 @@ class streamingflow(nn.Module):
                 for ix in range(B)
             ]
         )
-        # geom_feats[...,0]-=geom_feats[...,0].min()
-        # geom_feats[...,1]-=geom_feats[...,1].min()
-        # print('gmin',geom_feats[...,0].min(),geom_feats[...,1].min())
-        # print('gmax',geom_feats[...,0].max(),geom_feats[...,1].max())
         geom_feats = torch.cat((geom_feats, batch_ix), 1)
-        # save_cuda_tensor_as_npz(geom_feats, '4')
+        # save_cuda_tensor_as_npz(geom_feats)
         # print('max',geom_feats[...,0].max(),geom_feats[...,1].max(),geom_feats[...,2].max())
         # print('min',geom_feats[...,0].min(),geom_feats[...,1].min(),geom_feats[...,2].min())
         # geom_feats[...,0] -=geom_feats[...,0].min()
@@ -1025,7 +1001,6 @@ class streamingflow(nn.Module):
         x = x[kept]
         geom_feats = geom_feats[kept]
         x = bev_pool(x, geom_feats, B, self.bev_dimension[2], self.bev_dimension[0], self.bev_dimension[1])
-        # save_cuda_tensor_as_npz(geom_feats, '5')
 
         # collapse Z
         # final = torch.cat(x.unbind(dim=2), 1)
@@ -1269,8 +1244,8 @@ class streamingflow(nn.Module):
 
         return sample
 
-import open3d as o3d
-def save_cuda_tensor_as_npz(tensor, name='1',ispcd=True):
+
+def save_cuda_tensor_as_npz(tensor):
     """
     将CUDA中的PyTorch Tensor转换为NumPy数组并保存为npz文件
     
@@ -1278,7 +1253,7 @@ def save_cuda_tensor_as_npz(tensor, name='1',ispcd=True):
         tensor: 在CUDA上的PyTorch Tensor
         filename: 保存的文件名（可以是完整路径）
     """
-    filename = '/home/user/图片/'+name+'.npz'
+    filename = '/home/user/图片/2.npz'
     # 确保Tensor在CUDA上
     if not tensor.is_cuda:
         raise ValueError("Tensor不在CUDA上，请先将Tensor移动到CUDA")
@@ -1291,10 +1266,6 @@ def save_cuda_tensor_as_npz(tensor, name='1',ispcd=True):
     
     # 3. 保存为npz文件
     np.savez(filename, array=numpy_array)
-    if ispcd:
-        pcd = o3d.geometry.PointCloud()
-        pcd.points = o3d.utility.Vector3dVector(numpy_array[:,:3])
-        o3d.io.write_point_cloud('/home/user/图片/'+name+'.pcd', pcd)
     
     print(f"Tensor已保存为 {filename}")
     print(f"Tensor形状: {numpy_array.shape}")

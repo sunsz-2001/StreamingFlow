@@ -646,7 +646,7 @@ class streamingflow(nn.Module):
             bev_sequence = torch.cat([bev_sequence, future_egomotions_spatial], dim=-3)
 
         camera_states = self.temporal_model(bev_sequence)
-        # standard_spatial_size = self.bev_size  # (200, 200) - BEV 网格尺寸
+        standard_spatial_size = self.bev_size  # (200, 200) - BEV 网格尺寸
         standard_channels = self.future_pred_in_channels  # 64
         
         # 统一 camera_states 的空间尺寸和通道
@@ -728,8 +728,7 @@ class streamingflow(nn.Module):
         if self.n_future > 0:
             # past_states = states
             
-            present_state = states.sum(dim=1, keepdim=True).contiguous()
-            # present_state = states[:, -1:].contiguous()
+            present_state = states[:, -1:].contiguous()
             future_prediction_input = present_state 
             camera_states_for_ode = camera_states
             lidar_states_for_ode = lidar_states

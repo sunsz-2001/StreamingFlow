@@ -8,9 +8,10 @@ import pytorch_lightning as pl
 from pytorch_lightning.plugins import DDPPlugin
 from pytorch_lightning.callbacks import ModelCheckpoint
 
-from streamingflow.config_debug import get_parser, get_cfg
+from streamingflow.config_debug_lidar import get_parser, get_cfg
+# from streamingflow.config_debug_lidar_waymo import get_parser, get_cfg
 from streamingflow.datas.dataloaders import prepare_dataloaders
-from streamingflow.trainer_dsec_debug import TrainingModule
+from streamingflow.trainer_dsec_debug_lidar import TrainingModule_lidar
 
 
 def get_latest_checkpoint(folder_path):
@@ -49,7 +50,7 @@ def main():
     cfg = get_cfg(args)
 
     trainloader, valloader = prepare_dataloaders(cfg)
-    model = TrainingModule(cfg.convert_to_dict())
+    model = TrainingModule_lidar(cfg.convert_to_dict())
 
     if cfg.PRETRAINED.LOAD_WEIGHTS:
         # 加载预训练权重；仅加载在当前模型中存在且形状兼容的参数

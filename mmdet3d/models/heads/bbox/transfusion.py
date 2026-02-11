@@ -170,7 +170,7 @@ class TransFusionHead(nn.Module):
         self.prediction_heads = nn.ModuleList()
         for i in range(self.num_decoder_layers):
             heads = copy.deepcopy(common_heads)
-            heads.update(dict(heatmap=(self.num_classes, num_heatmap_convs)))
+            heads.update(dict(heatmap=(self.num_classes, num_heatmap_convs)))# 多检测头heatmap入口
             self.prediction_heads.append(
                 FFN(
                     hidden_channel,
@@ -243,10 +243,10 @@ class TransFusionHead(nn.Module):
             list[dict]: Output results for tasks.
         """
         batch_size = inputs.shape[0]
-        _validate_tensor(inputs, "TransFusionHead inputs")
+        # _validate_tensor(inputs, "TransFusionHead inputs")
         
         lidar_feat = self.shared_conv(inputs)
-        _validate_tensor(lidar_feat, "lidar_feat after shared_conv")
+        # _validate_tensor(lidar_feat, "lidar_feat after shared_conv")
 
         #################################
         # image to BEV
@@ -260,8 +260,8 @@ class TransFusionHead(nn.Module):
         # image guided query initialization
         #################################
         dense_heatmap = self.heatmap_head(lidar_feat)
-        _validate_tensor(dense_heatmap, "dense_heatmap after heatmap_head")
-        dense_heatmap_img = None
+        # _validate_tensor(dense_heatmap, "dense_heatmap after heatmap_head")
+        # dense_heatmap_img = None
         heatmap = dense_heatmap.detach().sigmoid()
         padding = self.nms_kernel_size // 2
         local_max = torch.zeros_like(heatmap)
@@ -583,7 +583,7 @@ class TransFusionHead(nn.Module):
             grid_size[:2] // self.train_cfg["out_size_factor"]
         )  # [x_len, y_len]
         heatmap = gt_bboxes_3d.new_zeros(
-            self.num_classes, feature_map_size[1], feature_map_size[0]
+            self.num_classes, feature_map_size[0], feature_map_size[1]
         )
 
         for idx in range(len(gt_bboxes_3d)):

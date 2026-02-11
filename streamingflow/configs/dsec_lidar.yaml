@@ -1,8 +1,8 @@
-TAG: 'dsec_event_lidar_eval_2'  # 训练日志和检查点保存目录名（与 event-only 区分）
+TAG: 'dsec_lidar_ep100_2'  # 训练日志和检查点保存目录名（与 event-only 区分）
 
 # GPUS: [1]
 GPUS: [0,1,2,3]
-BATCHSIZE: 2
+BATCHSIZE: 4
 PRECISION: 32  # 16 或 32，混合精度训练使用 16
 EPOCHS: 100  # 训练轮数
 
@@ -13,7 +13,7 @@ N_WORKERS: 8  # 数据加载器工作进程数
 # VIS_INTERVAL: 5000  # 可视化间隔（默认：5000）
 
 DATASET:
-  NAME: 'dsec'
+  NAME: 'dsec_lidar'
   DATAROOT: '/media/switcher/sda/datasets/dsec'
   USE_FLOW_DATA: True  # 启用流式数据格式，支持异步多模态数据融合
   # 【重要】启用流式模式以支持异步多模态数据融合
@@ -103,7 +103,7 @@ MODEL:
   TEMPORAL_MODEL:
     NAME: 'identity'
     INPUT_EGOPOSE: False
-    START_OUT_CHANNELS: 64  # 输出通道数，需与ENCODER.OUT_CHANNELS匹配
+    START_OUT_CHANNELS: 128  # 输出通道数，需与ENCODER.OUT_CHANNELS匹配
   
   # ODE 求解器配置（用于异步融合和未来预测）
   SOLVER: 'euler'  # ODE 求解器类型: 'euler'（欧拉法，快速）, 'midpoint'（中点法，更准确）, 'dopri5'（自适应步长，最准确但最慢）

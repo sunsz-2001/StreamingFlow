@@ -489,7 +489,7 @@ class CenterHead(BaseModule):
 
         for idx, task_head in enumerate(self.task_heads):
             heatmap = gt_bboxes_3d.new_zeros(
-                (len(self.class_names[idx]), feature_map_size[0], feature_map_size[1])
+                (len(self.class_names[idx]), feature_map_size[1], feature_map_size[0])
             )
 
             anno_box = gt_bboxes_3d.new_zeros((max_objs, 10), dtype=torch.float32)
@@ -558,7 +558,7 @@ class CenterHead(BaseModule):
 
                     mask[new_idx] = 1
                     # TODO: support other outdoor dataset
-                    vx, vy = task_boxes[idx][k][7:9]
+                    vx, vy = task_boxes[idx][k][7:]
                     rot = task_boxes[idx][k][6]
                     box_dim = task_boxes[idx][k][3:6]
                     if self.norm_bbox:

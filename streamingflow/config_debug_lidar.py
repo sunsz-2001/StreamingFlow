@@ -165,7 +165,7 @@ def set_cfg():
 
     _C.MODEL.TEMPORAL_MODEL = CN()
     _C.MODEL.TEMPORAL_MODEL.NAME = 'temporal_block'  # type of temporal model
-    _C.MODEL.TEMPORAL_MODEL.START_OUT_CHANNELS = 64
+    _C.MODEL.TEMPORAL_MODEL.START_OUT_CHANNELS = 128
     _C.MODEL.TEMPORAL_MODEL.EXTRA_IN_CHANNELS = 0
     _C.MODEL.TEMPORAL_MODEL.INBETWEEN_LAYERS = 0
     _C.MODEL.TEMPORAL_MODEL.PYRAMID_POOLING = True
@@ -258,7 +258,7 @@ def set_cfg():
 
 def get_parser():
     parser = argparse.ArgumentParser(description='Fiery training')
-    parser.add_argument('--config-file', default='/home/user/sunsz/StreamingFlow/streamingflow/configs/dsec_event_lidar.yaml', metavar='FILE', help='path to config file')
+    parser.add_argument('--config-file', default='/home/user/sunsz/StreamingFlow/streamingflow/configs/dsec_lidar.yaml', metavar='FILE', help='path to config file')
     parser.add_argument(
         'opts', help='Modify config options using the command-line', default=None, nargs=argparse.REMAINDER,
     )

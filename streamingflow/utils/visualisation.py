@@ -517,12 +517,14 @@ def plot_boxes_bev(boxes: np.ndarray, bev_range: tuple, resolution: float,
 
     if img is None:
         img = np.ones((H, W, 3), dtype=np.uint8) * 255
-
+    img = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
     for box in boxes:
         cx, cy, cz, dx, dy, dz, yaw = box[:7]
         corners = get_box_corners_2d(cx, cy, dx, dy, yaw)
         corners_px = ((corners - [x_min, y_min]) / resolution).astype(np.int32)
         cv2.polylines(img, [corners_px], True, color, 2)
+    img = cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
+    
     return img
 
 
