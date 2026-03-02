@@ -283,7 +283,10 @@ def export_and_eval(_cfg_path: str, checkpoint: str, dataroot: str, iou_thr: flo
     total_preds, total_gts = 0, 0
     pred_counts = {0: 0, 1: 0, 2: 0}
     gt_counts = {0: 0, 1: 0, 2: 0}
-
+    print(type(trainer.model))
+    for name,_ in trainer.model.named_modules():
+        print(name) 
+        
     for batch_idx, batch in enumerate(tqdm(valloader, desc="Evaluating")):
         batch = to_device(batch, device)
         with torch.no_grad():

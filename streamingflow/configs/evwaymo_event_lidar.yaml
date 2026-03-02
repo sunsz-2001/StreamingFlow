@@ -1,20 +1,20 @@
-TAG: 'dsec_event_lidar_eval_5'  # 训练日志和检查点保存目录名（与 event-only 区分）
+TAG: 'evwaymo_event_lidar_eval_4'  # 训练日志和检查点保存目录名（与 event-only 区分）
 
-# GPUS: [2]
-GPUS: [0,1,2,3]
+GPUS: [1]
+# GPUS: [0,1,2,3]
 BATCHSIZE: 2
 PRECISION: 32  # 16 或 32，混合精度训练使用 16
 EPOCHS: 50  # 训练轮数
 
-N_WORKERS: 4  # 数据加载器工作进程数
+N_WORKERS: 1  # 数据加载器工作进程数
 # LOG_DIR: 'logs'  # 日志保存目录（默认：'logs'）
 # GRAD_NORM_CLIP: 5  # 梯度裁剪阈值（默认：5）
 # LOGGING_INTERVAL: 500  # 日志记录间隔（默认：500）
 # VIS_INTERVAL: 5000  # 可视化间隔（默认：5000）
 
 DATASET:
-  NAME: 'dsec'
-  DATAROOT: '/media/switcher/sda/datasets/dsec'
+  NAME: 'evwaymo'
+  DATAROOT: '/media/switcher/sda/datasets/evwaymo'
   USE_FLOW_DATA: True  # 启用流式数据格式，支持异步多模态数据融合
   # 【重要】启用流式模式以支持异步多模态数据融合
   # 
@@ -56,17 +56,17 @@ N_FUTURE_FRAMES: 1  # 未来预测帧数
 # 建议值：4-6（根据任务需求调整，值越大计算量越大）
 
 IMAGE:
-  FINAL_DIM: (480, 640)
-  RESIZE_SCALE: 1
+  FINAL_DIM: (480, 320)
+  RESIZE_SCALE: 0.25
   TOP_CROP: 0
-  ORIGINAL_HEIGHT: 480
-  ORIGINAL_WIDTH: 640
+  ORIGINAL_HEIGHT: 1280
+  ORIGINAL_WIDTH: 1920
   NAMES: ['camera_0']
 
 LIFT:
   GT_DEPTH: False
   GEN_DEPTH: False
-  X_BOUND: [0, 51.2, 0.8]  # Forward direction [min, max, resolution]
+  X_BOUND: [0, 51.2,0.8]  # Forward direction [min, max, resolution]
   Y_BOUND: [-32, 32, 0.8]  # Side direction [min, max, resolution]
   Z_BOUND: [-10.0, 10.0, 20.0]  # Height [min, max, resolution]
   D_BOUND: [2.0, 50.0, 1.0]  # Depth [min, max, resolution]
@@ -98,7 +98,7 @@ MODEL:
     DEPTH_BINS: 80
     DEPTH_HEAD_CHANNELS: 128
     RESIDUAL_INIT: 0.0
-    INPUT_SIZE: [480, 640]  # Event 输入分辨率 [H, W]
+    INPUT_SIZE: [480, 320]  # Event 输入分辨率 [H, W]
     DOWNSAMPLE: 8  # Event encoder 下采样率（EventEncoderEvRT 固定为 8）
   TEMPORAL_MODEL:
     NAME: 'identity'
@@ -120,7 +120,7 @@ MODEL:
     N_GRU_BLOCKS: 2  # 空间 GRU 层数（用于处理空间信息）
     N_RES_LAYERS: 1  # 残差块层数（用于特征提取）
     MIXTURE: True  # 是否使用混合分布（用于建模多模态不确定性）
-    DELTA_T: 0.001  # ODE 求解的时间步长（秒），越小越准确但计算量越大
+    DELTA_T: 0.002  # ODE 求解的时间步长（秒），越小越准确但计算量越大
     USE_VARIABLE_ODE_STEP: False  # 是否使用自适应步长（需要 SOLVER='dopri5'）
 
 SEMANTIC_SEG:
@@ -159,5 +159,3 @@ OPTIMIZER:
 PRETRAINED:
   LOAD_WEIGHTS: False
   PATH: ''  # 暂不使用旧 ckpt，LiDAR 与 Event 均从当前结构随机初始化训练
-
-

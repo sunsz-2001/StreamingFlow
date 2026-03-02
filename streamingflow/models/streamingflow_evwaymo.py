@@ -42,7 +42,7 @@ def _validate_tensor(tensor, name, allow_inf=False):
         raise ValueError(f"Inf detected in {name}. Stats: {stats}, shape: {tensor.shape}")
 
 
-class streamingflow(nn.Module):
+class streamingflow_evwaymo(nn.Module):
     def __init__(self, cfg):
         super().__init__()
         self.cfg = cfg
@@ -89,6 +89,15 @@ class streamingflow(nn.Module):
         self.event_bev_fusion = getattr(self.cfg.MODEL.EVENT, "BEV_FUSION", "sum").lower()
 
         if self.use_event:
+            self.event_pre_block = nn.Sequential(
+                nn.Conv2d(5, 5, kernel_size=3, stride=2, padding=1),
+                nn.BatchNorm2d(5),
+                nn.ReLU(),
+                nn.Conv2d(5, 5, kernel_size=3, stride=1, padding=1),
+                nn.Conv2d(5, 5, kernel_size=3, stride=2, padding=1),
+                nn.BatchNorm2d(5),
+                nn.ReLU(),
+                )
             self.event_encoder = EventEncoderEvRT(
                 cfg=self.cfg.MODEL.EVENT,
                 out_channels=self.encoder_out_channels,
@@ -209,27 +218,27 @@ class streamingflow(nn.Module):
                         'block_type': 'basicblock',
                     },
                 },
-                'temporal_model': {
-                    'type': 'Temporal3DConvModel',
-                    'receptive_field': 3,
-                    'input_egopose': True,
-                    'in_channels': 256,
-                    'input_shape': [128, 128],
-                    'with_skip_connect': True,
-                    'start_out_channels': 256,
-                    'det_grid_conf': {
-                        'xbound': [0, 54.0, 0.6],
-                        'ybound': [-32, 32, 0.6],
-                        'zbound': [-5, 3, .0],
-                        'dbound': [1.0, 60.0, 1.0],
-                    },
-                    'grid_conf': {
-                        'xbound': [0, 51.2, 0.8],
-                        'ybound': [-32, 32, 0.8],
-                        'zbound': [-5, 3, 8.0],
-                        'dbound': [1.0, 60.0, 1.0],
-                    },
-                },
+                # 'temporal_model': {
+                #     'type': 'Temporal3DConvModel',
+                #     'receptive_field': 3,
+                #     'input_egopose': True,
+                #     'in_channels': 256,
+                #     'input_shape': [128, 128],
+                #     'with_skip_connect': True,
+                #     'start_out_channels': 256,
+                #     'det_grid_conf': {
+                #         'xbound': [0, 80, 0.6],
+                #         'ybound': [-80, 80, 0.6],
+                #         'zbound': [-2, 4, .0],
+                #         'dbound': [1.0, 60.0, 1.0],
+                #     },
+                #     'grid_conf': {
+                #         'xbound': [0, 75.2, 0.8],
+                #         'ybound': [-75.2, 75.2, 0.8],
+                #         'zbound': [-2, 4, 6.0],
+                #         'dbound': [1.0, 60.0, 1.0],
+                #     },
+                # },
             }
 
             self.encoders = nn.ModuleDict()
@@ -291,8 +300,8 @@ class streamingflow(nn.Module):
             # )
             self.temporal_model_lidar = TemporalModelIdentity(actual_lidar_output_channels,1)
 
-            if False:
-                ckpt = torch.load('/home/user/sunsz/StreamingFlow/logs/dsec_lidar_ep100_2/epoch=99-step=26199.ckpt', map_location='cpu')
+            if True:
+                ckpt = torch.load('/home/user/sunsz/StreamingFlow/logs/waymo_lidar_ep100/epoch=99-step=79299.ckpt', map_location='cpu')
                 self.encoders.load_state_dict(ckpt['state_dict'],strict=False)
                 for param in self.encoders.parameters():
                     param.requires_grad = False
@@ -1164,6 +1173,7 @@ class streamingflow(nn.Module):
             
             # [B, S, N, C, H, W] -> [B*S*N, C, H, W]
             event_reshaped = event_frames.view(b * s * n, c, h, w)
+            event_reshaped = self.event_pre_block(event_reshaped)
             event_feats, event_depth_logits = self.event_encoder_forward(event_reshaped)
             # event_feats[B,F,64,30,40], event_depth_logits[B,F,48,30,40]
             # Validate event encoder outputs

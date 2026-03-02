@@ -57,7 +57,8 @@ class DetectionDecoder(nn.Module):
         # 计算BEV网格参数
         bev_h = int((cfg.LIFT.X_BOUND[1] - cfg.LIFT.X_BOUND[0]) / cfg.LIFT.X_BOUND[2])
         bev_w = int((cfg.LIFT.Y_BOUND[1] - cfg.LIFT.Y_BOUND[0]) / cfg.LIFT.Y_BOUND[2])
-        grid_size = [bev_h, bev_w]
+        grid_size = [bev_w, bev_h]
+        # grid_size = [bev_h, bev_w]#ken
         
         # 计算voxel_size（从LIFT配置推导）
         voxel_size = [cfg.LIFT.X_BOUND[2], cfg.LIFT.Y_BOUND[2], cfg.LIFT.Z_BOUND[2]]

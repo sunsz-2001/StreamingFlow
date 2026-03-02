@@ -33,7 +33,7 @@ def set_cfg():
     _C.LOG_DIR = 'logs'
     _C.TAG = 'default'
 
-    _C.GPUS = [0]  # which gpus to use
+    _C.GPUS = [0,1,2,3]  # which gpus to use
     _C.PRECISION = 16  # 16bit or 32bit
     _C.BATCHSIZE = 2
     _C.EPOCHS = 20
@@ -74,7 +74,7 @@ def set_cfg():
 
     _C.IMAGE = CN()
     _C.IMAGE.FINAL_DIM = (480, 640)
-    _C.IMAGE.RESIZE_SCALE = 1
+    _C.IMAGE.RESIZE_SCALE = 1.0
     _C.IMAGE.TOP_CROP = 0
     _C.IMAGE.ORIGINAL_HEIGHT = 480  # Original input RGB camera height
     _C.IMAGE.ORIGINAL_WIDTH = 640  # Original input RGB camera width
@@ -85,7 +85,7 @@ def set_cfg():
     _C.LIFT.Y_BOUND = [-32, 32, 0.8]  # Sides
     _C.LIFT.Z_BOUND = [-10.0, 10.0, 20.0]  # Height
     _C.LIFT.D_BOUND = [2.0, 50.0, 1.0]
-    _C.LIFT.RANGE = [0, -32, -4, 51.2, 32, 4.0]
+    _C.LIFT.RANGE = [0, -32, -3, 51.2, 32, 5.0]
     _C.LIFT.GT_DEPTH = True
     _C.LIFT.GEN_DEPTH = False
     _C.LIFT.DISCOUNT = 0.5
@@ -149,8 +149,8 @@ def set_cfg():
 
 
     _C.VOXEL = CN()  # Lidar pointcloud voxelization
-    _C.VOXEL.VOXEL_SIZE = (0.1, 0.1, 0.2)
-    _C.VOXEL.AREA_EXTENTS = [[0, 51.2], [-32, 32], [-5, 3]]
+    _C.VOXEL.VOXEL_SIZE = (0.1, 0.1, 0.25)
+    _C.VOXEL.AREA_EXTENTS = [[0,51.2], [-32, 32], [-3, 5]]
 
 
     _C.MODEL.LIDAR.HEIGHT_FEAT_SIZE = int((_C.VOXEL.AREA_EXTENTS[2][1]-_C.VOXEL.AREA_EXTENTS[2][0])/_C.VOXEL.VOXEL_SIZE[2]) + 1
@@ -258,7 +258,7 @@ def set_cfg():
 
 def get_parser():
     parser = argparse.ArgumentParser(description='Fiery training')
-    parser.add_argument('--config-file', default='/home/user/sunsz/StreamingFlow/streamingflow/configs/dsec_event_lidar.yaml', metavar='FILE', help='path to config file')
+    parser.add_argument('--config-file', default='/home/user/sunsz/StreamingFlow/streamingflow/configs/evwaymo_event_lidar.yaml', metavar='FILE', help='path to config file')
     parser.add_argument(
         'opts', help='Modify config options using the command-line', default=None, nargs=argparse.REMAINDER,
     )

@@ -28,7 +28,7 @@ from mmdet.core import (
 __all__ = ["TransFusionHead"]
 
 
-def clip_sigmoid(x, eps=1e-3):
+def clip_sigmoid(x, eps=1e-4):
     """Clip sigmoid output to [eps, 1-eps] for numerical stability.
     
     Using eps=1e-3 instead of 1e-4 to avoid extreme log values in loss computation.
@@ -582,8 +582,8 @@ class TransFusionHead(nn.Module):
         feature_map_size = (
             grid_size[:2] // self.train_cfg["out_size_factor"]
         )  # [x_len, y_len]
-        heatmap = gt_bboxes_3d.new_zeros(
-            self.num_classes, feature_map_size[0], feature_map_size[1]
+        heatmap = gt_bboxes_3d.new_zeros(# ken
+            self.num_classes, feature_map_size[1], feature_map_size[0]
         )
 
         for idx in range(len(gt_bboxes_3d)):
