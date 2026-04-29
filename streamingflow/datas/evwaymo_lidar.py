@@ -141,9 +141,9 @@ class DatasetEVWaymo_lidar(torch.utils.data.Dataset):
 
     def get_scenes(self):
 
-        # split_dir = os.path.join(self.dataroot, 'train_test.txt')
+        split_dir = os.path.join(self.dataroot, 'val2.txt')
         # split_dir = os.path.join(self.dataroot, 'detection_' + 'train' + '_sample_new.txt')
-        split_dir = os.path.join(self.dataroot, self.mode + '.txt')
+        # split_dir = os.path.join(self.dataroot, self.mode + '.txt')
         sample_sequence_list = [x.strip() for x in open(split_dir).readlines()]
 
         self.infos = []

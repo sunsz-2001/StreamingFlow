@@ -557,7 +557,7 @@ class streamingflow(nn.Module):
                     x = feature.unsqueeze(1)  # [B, 1, C, H, W]
 
                 lidar_states = self.temporal_model_lidar(x)
-        if True:
+        if False:
             if not self.use_camera and not self.use_event:
                 raise ValueError("At least one of USE_CAMERA or USE_EVENT must be True.")
 
@@ -719,102 +719,103 @@ class streamingflow(nn.Module):
             states = torch.stack(lidar_states).squeeze(1)
         else:
             raise RuntimeError("Both camera_states and lidar_states are None. At least one modality must be available.")
-
+        if False:
         # Optional: build high-frequency camera states (single-frame lifting as ODE observations)
-        camera_states_hi = None
-        if self.use_camera and image_hi is not None and intrinsics_hi is not None and extrinsics_hi is not None and camera_timestamp_hi is not None:
-            # Accept either [S_cam,N,3,H,W] or [B,S_cam,N,3,H,W]
-            if image_hi.dim() == 5:
-                image_hi_b = image_hi.unsqueeze(0)
-                intrinsics_hi_b = intrinsics_hi.unsqueeze(0)
-                extrinsics_hi_b = extrinsics_hi.unsqueeze(0)
-            else:
-                image_hi_b = image_hi
-                intrinsics_hi_b = intrinsics_hi
-                extrinsics_hi_b = extrinsics_hi
-
-            b, S_cam = image_hi_b.shape[0], image_hi_b.shape[1]
-            zeros_ego = torch.zeros((b, S_cam, 6), device=image_hi_b.device, dtype=image_hi_b.dtype)
-            hi_outputs = self.calculate_birds_eye_view_features(
-                intrinsics_hi_b, extrinsics_hi_b, zeros_ego, image=image_hi_b
-            )
             camera_states_hi = None
-            if "camera" in hi_outputs:
-                camera_states_hi = hi_outputs["camera"]["bev"].contiguous()  # [B, S_cam, C, H, W]
+            if self.use_camera and image_hi is not None and intrinsics_hi is not None and extrinsics_hi is not None and camera_timestamp_hi is not None:
+                # Accept either [S_cam,N,3,H,W] or [B,S_cam,N,3,H,W]
+                if image_hi.dim() == 5:
+                    image_hi_b = image_hi.unsqueeze(0)
+                    intrinsics_hi_b = intrinsics_hi.unsqueeze(0)
+                    extrinsics_hi_b = extrinsics_hi.unsqueeze(0)
+                else:
+                    image_hi_b = image_hi
+                    intrinsics_hi_b = intrinsics_hi
+                    extrinsics_hi_b = extrinsics_hi
 
-        if self.n_future > 0:
-            # past_states = states
-            
-            # present_state = states.sum(dim=1, keepdim=True).contiguous()
-            # present_state = states[:, -1:].contiguous()
-            future_prediction_input = torch.stack(lidar_states) 
-            camera_states_for_ode = None
-            # camera_states_for_ode = camera_states
-            lidar_states_for_ode = lidar_states
-            camera_timestamp_ode = None
-            # camera_timestamp_ode = camera_timestamp
-            # camera_timestamp_ode = camera_timestamp[:, :self.receptive_field] if camera_timestamp is not None else None
-            lidar_timestamp_ode = lidar_timestamp
-            # lidar_timestamp_ode = lidar_timestamp[:, :self.receptive_field] if lidar_timestamp is not None else None
+                b, S_cam = image_hi_b.shape[0], image_hi_b.shape[1]
+                zeros_ego = torch.zeros((b, S_cam, 6), device=image_hi_b.device, dtype=image_hi_b.dtype)
+                hi_outputs = self.calculate_birds_eye_view_features(
+                    intrinsics_hi_b, extrinsics_hi_b, zeros_ego, image=image_hi_b
+                )
+                camera_states_hi = None
+                if "camera" in hi_outputs:
+                    camera_states_hi = hi_outputs["camera"]["bev"].contiguous()  # [B, S_cam, C, H, W]
 
-            future_states, auxilary_loss = self.future_prediction_ode(
-                future_prediction_input,
-                camera_states_for_ode,
-                lidar_states_for_ode,
-                camera_timestamp_ode,
-                lidar_timestamp_ode,
-                target_timestamp,
-                camera_states_hi=camera_states_hi,
-                camera_timestamp_hi=camera_timestamp_hi,
-            )
-            
-            # past_states_channels = past_states.shape[2]
-            # future_states_channels = future_states.shape[2]
-            # past_states_spatial = (past_states.shape[3], past_states.shape[4])
-            # future_states_spatial = (future_states.shape[3], future_states.shape[4])
-            
-            # if past_states_spatial != future_states_spatial:
-            #     B_fut, T_fut, C_fut, H_fut, W_fut = future_states.shape
-            #     future_states = torch.nn.functional.interpolate(
-            #         future_states.view(B_fut * T_fut, C_fut, H_fut, W_fut),
-            #         size=past_states_spatial,
-            #         mode='bilinear',
-            #         align_corners=False
-            #     ).view(B_fut, T_fut, C_fut, *past_states_spatial)
-
-            # if past_states_channels != future_states_channels:
-            #     projection_key = f'past_states_projection_{past_states_channels}_to_{future_states_channels}'
-            #     if not hasattr(self, 'past_states_projections'):
-            #         # 初始化投影层字典
-            #         self.past_states_projections = nn.ModuleDict()
+            if self.n_future > 0:
+                # past_states = states
                 
-            #     if projection_key not in self.past_states_projections:
-            #         projection = nn.Conv2d(
-            #             past_states_channels,
-            #             future_states_channels,
-            #             kernel_size=1,
-            #             bias=False
-            #         )
-            #         nn.init.xavier_uniform_(projection.weight)
-            #         self.past_states_projections[projection_key] = projection
-                
-            #     # 投影 past_states: [B, T, C_old, H, W] -> [B, T, C_new, H, W]
-            #     B, T, C_old, H, W = past_states.shape
-            #     past_states_reshaped = past_states.view(B * T, C_old, H, W)
-            #     past_states_projected = self.past_states_projections[projection_key](past_states_reshaped)
-            #     past_states = past_states_projected.view(B, T, future_states_channels, H, W)
-            states = future_states.squeeze(1)
-    
-            # predict BEV outputs
-            # Check states before passing to decoder
-            # _validate_tensor(states, "states before decoder (with temporal model)")
-            bev_output = self.decoder(states, metas)
+                # present_state = states.sum(dim=1, keepdim=True).contiguous()
+                # present_state = states[:, -1:].contiguous()
+                future_prediction_input = torch.stack(lidar_states) 
+                camera_states_for_ode = None
+                # camera_states_for_ode = camera_states
+                lidar_states_for_ode = lidar_states
+                camera_timestamp_ode = None
+                # camera_timestamp_ode = camera_timestamp
+                # camera_timestamp_ode = camera_timestamp[:, :self.receptive_field] if camera_timestamp is not None else None
+                lidar_timestamp_ode = lidar_timestamp
+                # lidar_timestamp_ode = lidar_timestamp[:, :self.receptive_field] if lidar_timestamp is not None else None
 
-        else:
-            # Perceive BEV outputs
-            # Check states before passing to decoder
-            # _validate_tensor(states, "states before decoder (without temporal model)")
-            bev_output = self.decoder(states, metas)
+                future_states, auxilary_loss = self.future_prediction_ode(
+                    future_prediction_input,
+                    camera_states_for_ode,
+                    lidar_states_for_ode,
+                    camera_timestamp_ode,
+                    lidar_timestamp_ode,
+                    target_timestamp,
+                    camera_states_hi=camera_states_hi,
+                    camera_timestamp_hi=camera_timestamp_hi,
+                )
+                
+                # past_states_channels = past_states.shape[2]
+                # future_states_channels = future_states.shape[2]
+                # past_states_spatial = (past_states.shape[3], past_states.shape[4])
+                # future_states_spatial = (future_states.shape[3], future_states.shape[4])
+                
+                # if past_states_spatial != future_states_spatial:
+                #     B_fut, T_fut, C_fut, H_fut, W_fut = future_states.shape
+                #     future_states = torch.nn.functional.interpolate(
+                #         future_states.view(B_fut * T_fut, C_fut, H_fut, W_fut),
+                #         size=past_states_spatial,
+                #         mode='bilinear',
+                #         align_corners=False
+                #     ).view(B_fut, T_fut, C_fut, *past_states_spatial)
+
+                # if past_states_channels != future_states_channels:
+                #     projection_key = f'past_states_projection_{past_states_channels}_to_{future_states_channels}'
+                #     if not hasattr(self, 'past_states_projections'):
+                #         # 初始化投影层字典
+                #         self.past_states_projections = nn.ModuleDict()
+                    
+                #     if projection_key not in self.past_states_projections:
+                #         projection = nn.Conv2d(
+                #             past_states_channels,
+                #             future_states_channels,
+                #             kernel_size=1,
+                #             bias=False
+                #         )
+                #         nn.init.xavier_uniform_(projection.weight)
+                #         self.past_states_projections[projection_key] = projection
+                    
+                #     # 投影 past_states: [B, T, C_old, H, W] -> [B, T, C_new, H, W]
+                #     B, T, C_old, H, W = past_states.shape
+                #     past_states_reshaped = past_states.view(B * T, C_old, H, W)
+                #     past_states_projected = self.past_states_projections[projection_key](past_states_reshaped)
+                #     past_states = past_states_projected.view(B, T, future_states_channels, H, W)
+                states = future_states.squeeze(1)
+        
+                # predict BEV outputs
+                # Check states before passing to decoder
+                # _validate_tensor(states, "states before decoder (with temporal model)")
+                bev_output = self.decoder(states, metas)
+
+            else:
+                # Perceive BEV outputs
+                # Check states before passing to decoder
+                # _validate_tensor(states, "states before decoder (without temporal model)")
+                bev_output = self.decoder(states, metas)
+        bev_output = self.decoder(states, metas)
 
         output = {**output, **bev_output}
         # output["event_bev"] = event_data["bev"] if event_data is not None else None

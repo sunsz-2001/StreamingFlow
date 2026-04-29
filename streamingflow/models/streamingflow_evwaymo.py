@@ -25,6 +25,8 @@ from mmdet3d.ops import bev_pool
 from mmdet3d.ops import Voxelization, DynamicScatter
 from mmdet3d.models.builder import build_backbone
 
+import matplotlib.pyplot as plt
+import cv2
 
 def _validate_tensor(tensor, name, allow_inf=False):
     """Validate tensor for NaN/Inf values and raise error if found.
@@ -40,6 +42,7 @@ def _validate_tensor(tensor, name, allow_inf=False):
     if not allow_inf and torch.isinf(tensor).any():
         stats = f"min={tensor.min().item():.6f}, max={tensor.max().item():.6f}, mean={tensor.mean().item():.6f}"
         raise ValueError(f"Inf detected in {name}. Stats: {stats}, shape: {tensor.shape}")
+
 
 
 class streamingflow_evwaymo(nn.Module):
@@ -82,6 +85,7 @@ class streamingflow_evwaymo(nn.Module):
 
         if self.use_camera:
             self.encoder = Encoder(cfg=self.cfg.MODEL.ENCODER, D=self.depth_channels)
+            # self.encoder = Encoder(cfg=self.cfg.MODEL.ENCODER, D=self.depth_channels)
 
         self.event_encoder = None
         self.event_channels = 0
@@ -300,27 +304,35 @@ class streamingflow_evwaymo(nn.Module):
             # )
             self.temporal_model_lidar = TemporalModelIdentity(actual_lidar_output_channels,1)
 
-            if True:
+            if False:
                 ckpt = torch.load('/home/user/sunsz/StreamingFlow/logs/waymo_lidar_ep100/epoch=99-step=79299.ckpt', map_location='cpu')
                 self.encoders.load_state_dict(ckpt['state_dict'],strict=False)
-                for param in self.encoders.parameters():
-                    param.requires_grad = False
-                self.encoders.eval()
+                
                 self.temporal_model_lidar.load_state_dict(ckpt['state_dict'],strict=False)
-                for param in self.temporal_model_lidar.parameters():
-                    param.requires_grad = False
-                self.temporal_model_lidar.eval()
+                
                 self.standard_projections.load_state_dict(ckpt['state_dict'],strict=False)
-                for param in self.standard_projections.parameters():
-                    param.requires_grad = False
-                self.standard_projections.eval()
+                # for param in self.temporal_model_lidar.parameters():
+                #     param.requires_grad = False
+                # self.temporal_model_lidar.eval()
+                # for param in self.encoders.parameters():
+                #     param.requires_grad = False
+                # self.encoders.eval()
+                # for param in self.standard_projections.parameters():
+                #     param.requires_grad = False
+                # self.standard_projections.eval()
                 del ckpt
                 torch.cuda.empty_cache()
         if self.cfg.PLANNING.ENABLED:
             self.planning = Planning(cfg, self.encoder_out_channels, 6, gru_state_size=self.cfg.PLANNING.GRU_STATE_SIZE)
 
         set_bn_momentum(self, self.cfg.MODEL.BN_MOMENTUM)
-
+        # self.decoder_pre_block = nn.Sequential(
+        #         nn.Conv2d(128, 64, kernel_size=3, stride=1, padding=1),
+        #         nn.BatchNorm2d(64),
+        #         nn.ReLU(),
+        #         nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1),
+        #         nn.ReLU(),
+        #         )
     def create_frustum(self):
         """Create grid in image plane."""
         event_input_size = getattr(self.cfg.MODEL.EVENT, "INPUT_SIZE", [0, 0])
@@ -488,8 +500,11 @@ class streamingflow_evwaymo(nn.Module):
         # x = torch.stack(features, dim=1)
         return features
 
-    def forward(self, image, intrinsics, extrinsics, future_egomotion, padded_voxel_points=None, camera_timestamp=None, points=None,lidar_timestamp=None, target_timestamp=None,
-                image_hi=None, intrinsics_hi=None, extrinsics_hi=None, camera_timestamp_hi=None, event=None, metas=None):
+    def forward(self, image, intrinsics, extrinsics, future_egomotion, 
+                padded_voxel_points=None, camera_timestamp=None, points=None,
+                lidar_timestamp=None, target_timestamp=None,
+                depth_image=None, image_hi=None, intrinsics_hi=None, 
+                extrinsics_hi=None, camera_timestamp_hi=None, event=None, metas=None):
         output = {}
 
         future_egomotion = future_egomotion[:, :self.receptive_field].contiguous()
@@ -497,7 +512,7 @@ class streamingflow_evwaymo(nn.Module):
         lidar_voxel_states = None
         lidar_states = None
         
-        if self.use_lidar:
+        if False and self.use_lidar:
             with torch.no_grad():
                 if isinstance(points, list) and len(points) > 0:
                     
@@ -623,7 +638,8 @@ class streamingflow_evwaymo(nn.Module):
             future_egomotion,
             image=image_rf,
             event=event_in,
-        )
+            depth_image=depth_image,
+            )
 
         camera_data = modality_outputs.get("camera")
         event_data = modality_outputs.get("event")
@@ -698,7 +714,7 @@ class streamingflow_evwaymo(nn.Module):
             #     ).view(B, T, standard_channels, *standard_spatial_size)
         
         # 统一 lidar_states 的空间尺寸和通道
-        if len(lidar_states)!=0:
+        if False and len(lidar_states)!=0:
             new_lidar_states = []
             for lidar_state in lidar_states:
                 if len(lidar_state)!=0:
@@ -751,7 +767,7 @@ class streamingflow_evwaymo(nn.Module):
             if "camera" in hi_outputs:
                 camera_states_hi = hi_outputs["camera"]["bev"].contiguous()  # [B, S_cam, C, H, W]
 
-        if self.n_future > 0:
+        if False and self.n_future > 0:
             # past_states = states
             
             present_state = states.sum(dim=1, keepdim=True).contiguous()
@@ -821,6 +837,22 @@ class streamingflow_evwaymo(nn.Module):
             # Perceive BEV outputs
             # Check states before passing to decoder
             # _validate_tensor(states, "states before decoder (without temporal model)")
+            camera_states = camera_states.sum(dim=1)
+            # print(len(lidar_states))
+                # dummy_lidar
+            if False:
+                if len(lidar_states)!=0:
+                    lidar_states = torch.cat(lidar_states,dim=0)
+                # print(lidar_states.shape)
+                    if lidar_states.shape[0]<camera_states.shape[0]:
+                        dummy_lidar = torch.zeros([camera_states.shape[0]-lidar_states.shape[0], 64,64,80]).to(lidar_states.device)
+                        lidar_states = torch.cat([lidar_states,dummy_lidar],dim=0)
+                    states = torch.cat([lidar_states, camera_states],dim=1)
+                else:
+                    dummy_lidar = torch.zeros([camera_states.shape[0], 64,64,80]).to(camera_states.device)
+                    states = torch.cat([dummy_lidar, camera_states],dim=1)
+            # states = self.decoder_pre_block(states)
+            states = camera_states
             bev_output = self.decoder(states, metas)
 
         output = {**output, **bev_output}
@@ -852,7 +884,7 @@ class streamingflow_evwaymo(nn.Module):
         # print('pmin',points[...,0].min(),points[...,1].min())
         # print('pmax',points[...,0].max(),points[...,1].max())
         
-        # points = points[...,[1,0,2]]
+        points = points[...,[2,0,1]]
         # The 3 dimensions in the ego reference frame are: (forward, sides, height)
         return points
 
@@ -879,11 +911,11 @@ class streamingflow_evwaymo(nn.Module):
 
         return x, depth, cam_front
 
-    def event_encoder_forward(self, event_frames):
+    def event_encoder_forward(self, event_frames, pts_depth):
         if not self.use_event:
             raise RuntimeError("Event encoder requested but USE_EVENT is False.")
         # event_frames已经是[B*S*N, C, H, W]形状，直接传入编码器
-        feats, depth_logits = self.event_encoder(event_frames)
+        feats, depth_logits = self.event_encoder(event_frames, pts_depth)
         return feats, depth_logits
 
     def _resize_event_depth_bins(self, depth_logits, target_bins):
@@ -1017,12 +1049,15 @@ class streamingflow_evwaymo(nn.Module):
 
         # flatten x
         x = x.reshape(Nprime, C)
+        # save_cuda_tensor_as_npz(geom_feats.view(Nprime, 3), '3', ispcd=True)
 
         # print('max',geom_feats[...,0].max(),geom_feats[...,1].max(),geom_feats[...,2].max())
         # print('min',geom_feats[...,0].min(),geom_feats[...,1].min(),geom_feats[...,2].min())
         # flatten indices
         geom_feats = ((geom_feats - (self.bev_start_position - self.bev_resolution / 2.0)) / self.bev_resolution).long()
         geom_feats = geom_feats.view(Nprime, 3)
+        # save_cuda_tensor_as_npz(geom_feats, '2', ispcd=True)
+
         batch_ix = torch.cat(
             [
                 torch.full([Nprime // B, 1], ix, device=x.device, dtype=torch.long)
@@ -1037,6 +1072,8 @@ class streamingflow_evwaymo(nn.Module):
         # save_cuda_tensor_as_npz(geom_feats, '4')
         # print('max',geom_feats[...,0].max(),geom_feats[...,1].max(),geom_feats[...,2].max())
         # print('min',geom_feats[...,0].min(),geom_feats[...,1].min(),geom_feats[...,2].min())
+        # save_cuda_tensor_as_npz(geom_feats, '4', ispcd=True)
+
         # geom_feats[...,0] -=geom_feats[...,0].min()
         # geom_feats[...,1] -=geom_feats[...,1].min()
         # filter out points that are outside box
@@ -1050,9 +1087,13 @@ class streamingflow_evwaymo(nn.Module):
         )
         x = x[kept]
         geom_feats = geom_feats[kept]
+        # print('max',geom_feats[...,0].max(),geom_feats[...,1].max(),geom_feats[...,2].max())
+        # print('min',geom_feats[...,0].min(),geom_feats[...,1].min(),geom_feats[...,2].min())
         x = bev_pool(x, geom_feats, B, self.bev_dimension[2], self.bev_dimension[0], self.bev_dimension[1])
-        # save_cuda_tensor_as_npz(geom_feats, '5')
-
+        # save_cuda_tensor_as_npz(geom_feats, '5', ispcd=True)
+        # save_cuda_tensor_as_npz(x, '6')
+        # show_tensor(x)
+        
         # collapse Z
         # final = torch.cat(x.unbind(dim=2), 1)
 
@@ -1093,6 +1134,8 @@ class streamingflow_evwaymo(nn.Module):
                 # flatten x
                 x_b = flow_b[t]
                 geometry_b = flow_geo[t]
+                # save_cuda_tensor_as_npz(geometry_b.view(-1,3), '1', ispcd=True)
+
                 n_geo, d_geo, h_geo, w_geo, _ = geometry_b.shape
                 n_x, d_x, h_x, w_x, _ = x_b.shape
                 
@@ -1122,6 +1165,8 @@ class streamingflow_evwaymo(nn.Module):
                 tmp_bev_feature = bev_feature.permute((0, 3, 1, 2))
                 tmp_bev_feature = tmp_bev_feature.squeeze(0)
                 output[b, t] = tmp_bev_feature
+        # temp_out = output.sum(dim=1).sum(dim=1)[0]
+        # tensor_to_image(temp_out, save_path='/home/user/图片/2.jpg')
 
         return output
 
@@ -1132,6 +1177,8 @@ class streamingflow_evwaymo(nn.Module):
         future_egomotion,
         image=None,
         event=None,
+        depth_image=None,
+        
     ):
         b, s, n = intrinsics.shape[:3]
 
@@ -1140,7 +1187,8 @@ class streamingflow_evwaymo(nn.Module):
         geometry = self.get_geometry(intrinsics_packed, extrinsics_packed)
         geometry = unpack_sequence_dim(geometry, b, s)
         outputs = {}
-
+        # for n in range(depth_image.shape[0]):
+        #     tensor_to_image(depth_image[n], save_path='/home/user/图片/1.jpg')
         camera_volume = None
         camera_depth_logits = None
         cam_front = None
@@ -1174,7 +1222,7 @@ class streamingflow_evwaymo(nn.Module):
             # [B, S, N, C, H, W] -> [B*S*N, C, H, W]
             event_reshaped = event_frames.view(b * s * n, c, h, w)
             event_reshaped = self.event_pre_block(event_reshaped)
-            event_feats, event_depth_logits = self.event_encoder_forward(event_reshaped)
+            event_feats, event_depth_logits = self.event_encoder_forward(event_reshaped, depth_image)
             # event_feats[B,F,64,30,40], event_depth_logits[B,F,48,30,40]
             # Validate event encoder outputs
             # _validate_tensor(event_feats, "event_feats from event_encoder_forward")
@@ -1297,7 +1345,7 @@ class streamingflow_evwaymo(nn.Module):
         return sample
 
 import open3d as o3d
-def save_cuda_tensor_as_npz(tensor, name='1',ispcd=True):
+def save_cuda_tensor_as_npz(tensor, name='1',ispcd=False):
     """
     将CUDA中的PyTorch Tensor转换为NumPy数组并保存为npz文件
     
@@ -1314,7 +1362,7 @@ def save_cuda_tensor_as_npz(tensor, name='1',ispcd=True):
     tensor_cpu = tensor.cpu()
     
     # 2. 转换为NumPy数组
-    numpy_array = tensor_cpu.numpy()
+    numpy_array = tensor_cpu.detach().numpy()
     
     # 3. 保存为npz文件
     np.savez(filename, array=numpy_array)
@@ -1326,3 +1374,90 @@ def save_cuda_tensor_as_npz(tensor, name='1',ispcd=True):
     print(f"Tensor已保存为 {filename}")
     print(f"Tensor形状: {numpy_array.shape}")
     print(f"Tensor数据类型: {numpy_array.dtype}")
+
+def show_tensor(tensor):
+    tensor = tensor.sum(1).squeeze(0).squeeze(0)
+    tensor_cpu = tensor.cpu()
+    # 2. 转换为NumPy数组
+    numpy_array = tensor_cpu.detach().numpy()
+    numpy_array  = numpy_array-np.min(numpy_array)
+    numpy_array[numpy_array!=0]=255
+    cv2.imshow('def', numpy_array)
+    # plt.imshow(numpy_array, cmap='gray', vmin=np.min(numpy_array),vmax=np.max(numpy_array))
+    # plt.show()
+
+import numpy as np
+import matplotlib.pyplot as plt
+from typing import Optional, Union
+
+def tensor_to_image(tensor: torch.Tensor, 
+                    denormalize: bool = True,
+                    mean: list = [0.485, 0.456, 0.406],
+                    std: list = [0.229, 0.224, 0.225],
+                    save_path: Optional[str] = None,
+                    figsize: tuple = (10, 10)) -> np.ndarray:
+    """
+    将CUDA tensor转换为可显示的图像
+    
+    Args:
+        tensor: CUDA tensor，形状可以是 (C, H, W) 或 (B, C, H, W) 或 (H, W, C)
+        denormalize: 是否进行反归一化
+        mean: 归一化时的均值
+        std: 归一化时的标准差
+        save_path: 保存路径，如果提供则保存图像
+        figsize: matplotlib图形大小
+    
+    Returns:
+        numpy数组，形状为 (H, W, 3)，值范围 0-255
+    """
+    # 1. 将tensor移到CPU并转换为numpy
+    if tensor.is_cuda:
+        tensor = tensor.cpu()
+    
+    # 2. 处理不同形状
+    if tensor.dim() == 4:  # (B, C, H, W)
+        tensor = tensor[0]  # 取第一个batch
+    elif tensor.dim() == 2:  # (H, W) 灰度图
+        pass
+    elif tensor.dim() == 3 and tensor.shape[0] in [1, 3]:  # (C, H, W)
+        pass
+    elif tensor.dim() == 3 and tensor.shape[-1] in [1, 3]:  # (H, W, C)
+        tensor = tensor.permute(2, 0, 1)  # 转换为 (C, H, W)
+    
+    # 3. 转换为numpy数组
+    img = tensor.detach().numpy()
+    
+    # 4. 处理灰度图
+    if img.shape[0] == 1:
+        img = img.squeeze(0)
+    
+    # 5. 反归一化（如果需要）
+    if denormalize and img.shape[0] == 3:
+        mean_tensor = np.array(mean).reshape(3, 1, 1)
+        std_tensor = np.array(std).reshape(3, 1, 1)
+        img = img * std_tensor + mean_tensor
+    
+    # 6. 转换为图像格式
+    if img.ndim == 3:  # (C, H, W) -> (H, W, C)
+        img = np.transpose(img, (1, 2, 0))
+    
+    # 7. 确保值在有效范围内
+    img = np.clip(img, 0, 1)
+    img = (img * 255).astype(np.uint8)
+    
+    # 8. 显示或保存
+    plt.figure(figsize=figsize)
+    if img.shape[-1] == 1 or len(img.shape) == 2:
+        plt.imshow(img.squeeze(), cmap='gray')
+    else:
+        plt.imshow(img)
+    plt.axis('off')
+    plt.title('Tensor Visualization')
+    
+    if save_path:
+        plt.savefig(save_path, bbox_inches='tight', dpi=150)
+        print(f"图像已保存到: {save_path}")
+    
+    plt.show()
+    
+    return img

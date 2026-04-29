@@ -101,6 +101,8 @@ def main():
     
     # 检查 checkpoint 是否存在且有效
     if latest_ckpt is not None:
+        ckpt = torch.load(latest_ckpt, map_location='cpu')
+
         if not os.path.exists(latest_ckpt):
             print(f"WARNING: Checkpoint file not found: {latest_ckpt}")
             print("Starting training from scratch (no checkpoint resume).")
@@ -160,7 +162,7 @@ def main():
         callbacks=[checkpoint_callback],
         resume_from_checkpoint=latest_ckpt
     )
-    
+
     trainer.fit(model, trainloader)
     # trainer.fit(model, trainloader, valloader)
 

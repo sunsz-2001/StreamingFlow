@@ -10,7 +10,7 @@ from tqdm import tqdm
 from streamingflow.datas.dataloaders import prepare_dataloaders
 from streamingflow.trainer_dsec_debug_lidar import TrainingModule_lidar
 from streamingflow.utils.network import preprocess_batch
-from streamingflow.config_debug_lidar import get_cfg, get_parser
+from streamingflow.config_debug_lidar_waymo import get_cfg, get_parser
 from mmdet3d.core.bbox.iou_calculators.iou3d_calculator import bbox_overlaps_3d
 
 import open3d as o3d
@@ -286,7 +286,7 @@ def export_and_eval(_cfg_path: str, checkpoint: str, dataroot: str, iou_thr: flo
     print(type(trainer.model))
     for name,_ in trainer.model.named_modules():
         print(name) 
-        
+    print('len', len(valloader))
     for batch_idx, batch in enumerate(tqdm(valloader, desc="Evaluating")):
         batch = to_device(batch, device)
         with torch.no_grad():
@@ -335,13 +335,12 @@ def export_and_eval(_cfg_path: str, checkpoint: str, dataroot: str, iou_thr: flo
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="DSEC mAP evaluation")
     # parser.add_argument("--config-file", default="/home/user/sunsz/StreamingFlow/streamingflow/configs/evwaymo_lidar.yaml")
-    parser.add_argument("--config-file", default="/home/user/sunsz/StreamingFlow/streamingflow/configs/dsec_lidar.yaml")
-    parser.add_argument("--checkpoint", default='/home/user/sunsz/StreamingFlow/logs/dsec_lidar_ep100_2/epoch=99-step=26199.ckpt')
+    parser.add_argument("--config-file", default="/home/user/sunsz/StreamingFlow/streamingflow/configs/evwaymo_lidar.yaml")
+    parser.add_argument("--checkpoint", default='/media/switcher/sda/chenzhuo/weights/streamingflow/20260328/waymo_lidar_ep100/epoch=99-step=79299.ckpt')
     # parser.add_argument("--checkpoint", default='/home/user/sunsz/StreamingFlow/logs/dsec_lidar_ep100/epoch=99-step=26199.ckpt')
-    # parser.add_argument("--dataroot", default='/media/switcher/sda/datasets/evwaymo/')
-    parser.add_argument("--dataroot", default='/media/switcher/sda/datasets/dsec/')
+    parser.add_argument("--dataroot", default='/media/switcher/sda/datasets/evwaymo/')
     parser.add_argument("--iou-thr", type=float, default=0.5)
-    parser.add_argument("--score-thr", type=float, default=0.001)
+    parser.add_argument("--score-thr", type=float, default=0.01)
     parser.add_argument("--visualize", default=False, action="store_true", help="Enable visualization")
     parser.add_argument("--vis-interval", type=int, default=30, help="Visualize every N batches")
     parser.add_argument("--vis-save-path", default="dsec_visualize", help="Save directory")

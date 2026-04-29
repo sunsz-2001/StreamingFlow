@@ -258,6 +258,39 @@ def vis_point(pts, preds, gts, win_name):
     vis.destroy_window()
     
 
+def vis_lidar_only(batch, output, preds, gts, idx, save_dir, cfg):
+    # event_img     | lidar_img | event_bev_img，
+    # lidar_bev_img | pred_img  | gt_img
+
+    os.makedirs(save_dir, exist_ok=True)
+
+    # 提取数据
+    flow_data = batch['flow_data'][0][0]
+
+    def _last_item(value):
+        if isinstance(value, (list, tuple)) and len(value) > 0:
+            return _last_item(value[-1])
+        return value
+
+    events = _last_item(flow_data.get('flow_events'))
+    if torch.is_tensor(events):
+        events = events.cpu().numpy()
+    elif isinstance(events, np.ndarray):
+        events = events
+    else:
+        raise TypeError(f"Unexpected flow_events type: {type(events)}")
+
+    points = _last_item(flow_data.get('flow_lidar'))
+    if torch.is_tensor(points):
+        points = points.cpu().numpy()
+    elif isinstance(points, np.ndarray):
+        points = points
+    else:
+        return 
+    if True and len(points)!=0:
+        vis_point(points,preds,gts, batch['sequence_name'][-1])
+    
+
 def save_dsec_visualization(batch, output, preds, gts, idx, save_dir, cfg):
     # event_img     | lidar_img | event_bev_img，
     # lidar_bev_img | pred_img  | gt_img
@@ -380,7 +413,12 @@ def export_and_eval(_cfg_path: str, checkpoint: str, dataroot: str, iou_thr: flo
                 mask = scores >= score_thr
                 vis_preds.append((boxes[mask], scores[mask], labels[mask]))
         if visualize and batch_idx % vis_interval == 0 and batch_idx>0:  
-            save_dsec_visualization(batch, output, vis_preds, gts, batch_idx, vis_save_path, cfg)
+            if False:
+                save_dsec_visualization(batch, output, vis_preds, gts, batch_idx, vis_save_path, cfg)
+
+            else:
+                vis_lidar_only(batch, output, vis_preds, gts, batch_idx, vis_save_path, cfg)
+
 
         for idx, (pred, gt) in enumerate(zip(preds, gts)):
             seq_name = batch.get('sequence_name', ['unknown'])[idx] if 'sequence_name' in batch else f'seq_{idx}'
@@ -416,12 +454,12 @@ def export_and_eval(_cfg_path: str, checkpoint: str, dataroot: str, iou_thr: flo
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="DSEC mAP evaluation")
     parser.add_argument("--config-file", default="/home/user/sunsz/StreamingFlow/streamingflow/configs/dsec_event_lidar.yaml")
-    parser.add_argument("--checkpoint", default='/home/user/sunsz/StreamingFlow/logs/dsec_event_lidar_eval_4/epoch=49-step=52499.ckpt')
+    parser.add_argument("--checkpoint", default='/home/user/sunsz/StreamingFlow/logs/dsec_event_lidar128_12/epoch=49-step=42449.ckpt')
     parser.add_argument("--dataroot", default='/media/switcher/sda/datasets/dsec/')
     parser.add_argument("--iou-thr", type=float, default=0.1)
-    parser.add_argument("--score-thr", type=float, default=0.001)
+    parser.add_argument("--score-thr", type=float, default=0.0001)
     parser.add_argument("--visualize", default=False,action="store_true", help="Enable visualization")
-    parser.add_argument("--vis-interval", type=int, default=29, help="Visualize every N batches")
+    parser.add_argument("--vis-interval", type=int, default=58, help="Visualize every N batches")
     parser.add_argument("--vis-save-path", default="dsec_visualize", help="Save directory")
     args = parser.parse_args()
     export_and_eval(args.config_file, args.checkpoint, args.dataroot, args.iou_thr,

@@ -583,7 +583,7 @@ class TransFusionHead(nn.Module):
             grid_size[:2] // self.train_cfg["out_size_factor"]
         )  # [x_len, y_len]
         heatmap = gt_bboxes_3d.new_zeros(# ken
-            self.num_classes, feature_map_size[1], feature_map_size[0]
+            self.num_classes, feature_map_size[0], feature_map_size[1]
         )
 
         for idx in range(len(gt_bboxes_3d)):

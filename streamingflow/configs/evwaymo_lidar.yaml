@@ -79,7 +79,7 @@ MODEL:
     USE_RADAR: False
   ENCODER:
     NAME: 'efficientnet-b0'
-    OUT_CHANNELS: 64
+    OUT_CHANNELS: 128
     DOWNSAMPLE: 8
     USE_DEPTH_DISTRIBUTION: False
   EVENT:

@@ -1,4 +1,5 @@
 import os
+from re import S
 from PIL import Image
 import pickle 
 import io
@@ -31,7 +32,7 @@ import yaml
 from streamingflow.utils import box_utils, common_utils
 from mmdet3d.core.bbox import LiDARInstance3DBoxes
 from mmdet3d.core.bbox import get_box_type
-
+import time
 def resize_and_crop_image(img, resize_dims, crop):
     img_resized = cv2.resize(img, resize_dims, interpolation=cv2.INTER_LINEAR)
     x, y, w, h = crop
@@ -103,7 +104,7 @@ def locate_message(utimes, utime):
         i -= 1
     return i
 
-class DatasetDSEC_lidar(torch.utils.data.Dataset):
+class DatasetEVWaymo(torch.utils.data.Dataset):
     def __init__(self, data_cfg,  cfg, is_train=True):
         self.data_cfg = data_cfg
         self.is_train = is_train
@@ -134,8 +135,16 @@ class DatasetDSEC_lidar(torch.utils.data.Dataset):
             ]
         )
 
+        bev_resolution, bev_start_position, bev_dimension = calculate_birds_eye_view_parameters(
+            cfg.LIFT.X_BOUND, cfg.LIFT.Y_BOUND, cfg.LIFT.Z_BOUND
+        )
+        self.bev_resolution, self.bev_start_position, self.bev_dimension = (
+            bev_resolution.numpy(), bev_start_position.numpy(), bev_dimension.numpy()
+        )
+
         self.spatial_extent = (self.cfg.LIFT.X_BOUND[1], self.cfg.LIFT.Y_BOUND[1])
         self.class_names = ['Vehicle', 'Cyclist', 'Pedestrian']
+        self.temp_counter = 0
 
 
 
@@ -143,10 +152,11 @@ class DatasetDSEC_lidar(torch.utils.data.Dataset):
 
         # split_dir = os.path.join(self.dataroot, 'train_test.txt')
         # split_dir = os.path.join(self.dataroot, 'detection_' + 'train' + '_sample_new.txt')
-        split_dir = os.path.join(self.dataroot, 'detection_' + self.mode + '_sample_new.txt')
-        sample_sequence_list = [x.strip() for x in open(split_dir).readlines()]
+        split_dir = os.path.join(self.dataroot, self.mode + '.txt')
+        sample_sequence_list = [x.strip().split('.')[0] for x in open(split_dir).readlines()]
 
         self.infos = []
+        self.dataloader_index = []
         self.init_infos(sample_sequence_list)
         return sample_sequence_list
     
@@ -157,9 +167,9 @@ class DatasetDSEC_lidar(torch.utils.data.Dataset):
         for k in range(len(sample_sequence_list)):
             sequence_name = os.path.splitext(sample_sequence_list[k])[0]
             if self.mode == 'train':
-                info_path = os.path.join(self.dataroot, sequence_name, ('%s.pkl' % sequence_name)).replace('.pkl', '_fov_bbox_lidar_check.pkl')
+                info_path = os.path.join(self.dataroot, sequence_name, ('%s.pkl' % sequence_name)).replace('.pkl', '_interpolate_fov_bbox_lidar_check_flow.pkl')
             else:
-                info_path = os.path.join(self.dataroot, sequence_name, ('%s.pkl' % sequence_name)).replace('.pkl', '_fov_bbox_lidar_check.pkl')    
+                info_path = os.path.join(self.dataroot, sequence_name, ('%s.pkl' % sequence_name)).replace('.pkl', '_interpolate_fov_bbox_lidar_check_flow.pkl')    
                 
             if not os.path.exists(info_path):
                 num_skipped_infos += 1
@@ -169,26 +179,90 @@ class DatasetDSEC_lidar(torch.utils.data.Dataset):
 
             if self.mode == 'train':
                 new_infos = []
-                infos = infos[:-1]
+                infos = infos[1:]
                 
                 for i in range(len(infos)):
+                    # print(len(infos[i]['annos']))
+                    if len(infos[i]['annos']) <10:
+                        # print('dirty data!')
+                        continue
                     new_info = copy.deepcopy(infos[i])
-
-                    counter+=1
                     
+                    for n in range(self.num_speed//10):
+                        # if n>0: continue
+                        flow_idx = new_info['flow_list'][n]
+                        self.dataloader_index.append(str(counter)+'_'+str(flow_idx))
+                    counter+=1
+                    event_grid_paths = []
+                    event_paths = []
+                    img_infos = infos[i]['image']
+                    event_init_path = os.path.join(self.dataroot, 
+                                                  img_infos['image_' + str(i+1) + '_path'].split('/waymo_processed_data_v4/')[-1].split('/image_0/')[0],
+                                                   'events_split_100hz',
+                                                   )
+                    event_grid_init_path = os.path.join(self.dataroot,
+                                                   img_infos['image_' + str(i+1) + '_path'].split('/waymo_processed_data_v4/')[-1].split('/image_0/')[0],
+                                                   'voxel_wstmp_100hz',
+                                                   )
+                    # event_file_number = int(img_infos['event_0_path'].split('/')[-1][:6]) + 2
+                    # event_file_name = str(event_file_number).zfill(6)
+                    event_file_name = img_infos['image_' + str(i+1) + '_path'].split('/image_0/')[-1][:-4]
+                    for j in range(self.event_speed//10):
+                        # event_grid_paths.append(os.path.join(event_grid_init_path, event_file_name + '_' + str(j+1) + '.npz'))
+                        event_paths.append(os.path.join(event_init_path, event_file_name + '_' + str(j) + '.npz'))
+                    event_grid_paths.append(os.path.join(event_grid_init_path, event_file_name + '_100hz.npz'))
+                    event_grid_paths = np.array(event_grid_paths)
+                    event_paths = np.array(event_paths)
+                    lidar_path = os.path.join(self.dataroot, infos[i]['lidar_path'].split('/')[-2],'lidar_fov',infos[i]['lidar_path'].split('/')[-1])
+                    new_info['event_grid_paths'] = event_grid_paths
+                    new_info['event_paths'] = event_paths
+                    new_info['lidar_path'] = lidar_path
+                    new_info['seq_annos'] = np.array(infos[i]['annos'])
                     # new_info['seq_annos'] = np.array(infos[i]['annos'])
                     
                     new_infos.append(new_info)
                 infos = new_infos
             else:
+                
                 new_infos = []
-                infos = infos[:-1]
-
+                infos = infos[1:]
+                
                 for i in range(len(infos)):
+                    if len(infos[i]['annos']) <10:
+                        continue
                     new_info = copy.deepcopy(infos[i])
-                    
-                    
+                    for n in range(self.num_speed//10):
+                        # if n>0: continue
+                        flow_idx = new_info['flow_list'][n]
+                        self.dataloader_index.append(str(counter)+'_'+str(flow_idx))
+                    counter+=1
+                    event_grid_paths = []
+                    event_paths = []
+                    img_infos = infos[i]['image']
+                    event_init_path = os.path.join(self.dataroot, 
+                                                  img_infos['image_' + str(i+1) + '_path'].split('/waymo_processed_data_v4/')[-1].split('/image_0/')[0],
+                                                   'events_split_100hz',
+                                                   )
+                    event_grid_init_path = os.path.join(self.dataroot,
+                                                   img_infos['image_' + str(i+1) + '_path'].split('/waymo_processed_data_v4/')[-1].split('/image_0/')[0],
+                                                   'voxel_wstmp_100hz',
+                                                   )
+                    # event_file_number = int(img_infos['event_0_path'].split('/')[-1][:6]) + 2
+                    # event_file_name = str(event_file_number).zfill(6)
+                    event_file_name = img_infos['image_' + str(i+1) + '_path'].split('/image_0/')[-1][:-4]
+                    for j in range(self.event_speed//10):
+                        # event_grid_paths.append(os.path.join(event_grid_init_path, event_file_name + '_' + str(j+1) + '.npz'))
+                        event_paths.append(os.path.join(event_init_path, event_file_name + '_' + str(j) + '.npz'))
+                    event_grid_paths.append(os.path.join(event_grid_init_path, event_file_name + '_100hz.npz'))
+                    event_grid_paths = np.array(event_grid_paths)
+                    event_paths = np.array(event_paths)
+                    lidar_path = os.path.join(self.dataroot, infos[i]['lidar_path'].split('/')[-2],'lidar_fov',infos[i]['lidar_path'].split('/')[-1])
+                    new_info['event_grid_paths'] = event_grid_paths
+                    new_info['event_paths'] = event_paths
+                    new_info['lidar_path'] = lidar_path
+                    new_info['seq_annos'] = np.array(infos[i]['annos'])
                     # new_info['seq_annos'] = np.array(infos[i]['annos'])
+                    
                     new_infos.append(new_info)
                 infos = new_infos
             waymo_infos.extend(infos)
@@ -300,83 +374,6 @@ class DatasetDSEC_lidar(torch.utils.data.Dataset):
 
         return tmp_cam
 
-    def get_input_data(self, rec):
-        """Get camera images, intrinsics, and extrinsics for a given sample."""
-        images = []
-        intrinsics = []
-        extrinsics = []
-        depths = []
-        cameras = self.cfg.IMAGE.NAMES
-
-        lidar_sample = self.nusc.get('sample_data', rec['data']['LIDAR_TOP'])
-        lidar_pose = self.nusc.get('ego_pose', lidar_sample['ego_pose_token'])
-        yaw = Quaternion(lidar_pose['rotation']).yaw_pitch_roll[0]
-        lidar_rotation = Quaternion(scalar=np.cos(yaw / 2), vector=[0, 0, np.sin(yaw / 2)])
-        lidar_translation = np.array(lidar_pose['translation'])[:, None]
-        lidar_to_world = np.vstack([
-            np.hstack((lidar_rotation.rotation_matrix, lidar_translation)),
-            np.array([0, 0, 0, 1])
-        ])
-
-        for cam in cameras:
-            camera_sample = self.nusc.get('sample_data', rec['data'][cam])
-
-            # Transformation from world to egopose
-            car_egopose = self.nusc.get('ego_pose', camera_sample['ego_pose_token'])
-            egopose_rotation = Quaternion(car_egopose['rotation']).inverse
-            egopose_translation = -np.array(car_egopose['translation'])[:, None]
-            world_to_car_egopose = np.vstack([
-                np.hstack((egopose_rotation.rotation_matrix, egopose_rotation.rotation_matrix @ egopose_translation)),
-                np.array([0, 0, 0, 1])
-            ])
-
-            # From egopose to sensor
-            sensor_sample = self.nusc.get('calibrated_sensor', camera_sample['calibrated_sensor_token'])
-            intrinsic = torch.Tensor(sensor_sample['camera_intrinsic'])
-            sensor_rotation = Quaternion(sensor_sample['rotation'])
-            sensor_translation = np.array(sensor_sample['translation'])[:, None]
-            car_egopose_to_sensor = np.vstack([
-                np.hstack((sensor_rotation.rotation_matrix, sensor_translation)),
-                np.array([0, 0, 0, 1])
-            ])
-            car_egopose_to_sensor = np.linalg.inv(car_egopose_to_sensor)
-
-            # Combine all the transformation.
-            # From sensor to lidar.
-            lidar_to_sensor = car_egopose_to_sensor @ world_to_car_egopose @ lidar_to_world
-            sensor_to_lidar = torch.from_numpy(np.linalg.inv(lidar_to_sensor)).float()
-
-            # Load image
-            image_filename = os.path.join(self.dataroot, camera_sample['filename'])
-            img = Image.open(image_filename)
-            # Resize and crop
-            img = resize_and_crop_image(
-                img, resize_dims=self.augmentation_parameters['resize_dims'], crop=self.augmentation_parameters['crop']
-            )
-            # Normalise image
-            normalised_img = self.normalise_image(img)
-
-            # Combine resize/cropping in the intrinsics
-            top_crop = self.augmentation_parameters['crop'][1]
-            left_crop = self.augmentation_parameters['crop'][0]
-            intrinsic = update_intrinsics(
-                intrinsic, top_crop, left_crop,
-                scale_width=self.augmentation_parameters['scale_width'],
-                scale_height=self.augmentation_parameters['scale_height']
-            )
-
-            images.append(normalised_img.unsqueeze(0).unsqueeze(0))
-            intrinsics.append(intrinsic.unsqueeze(0).unsqueeze(0))
-            extrinsics.append(sensor_to_lidar.unsqueeze(0).unsqueeze(0))
-
-        images, intrinsics, extrinsics = (torch.cat(images, dim=1),
-                                          torch.cat(intrinsics, dim=1),
-                                          torch.cat(extrinsics, dim=1)
-                                          )
-        # if len(depths) > 0:
-        #     depths = torch.cat(depths, dim=1)
-
-        return images, intrinsics, extrinsics
     def get_lidar_data(self, sample_rec, nsweeps, min_distance):
         """
         Returns at most nsweeps of lidar in the ego frame.
@@ -514,17 +511,17 @@ class DatasetDSEC_lidar(torch.utils.data.Dataset):
             lidar_path = self.infos[i]["lidar_path"]
             #################### For disparity input #################
             lidar_path = os.path.join(self.dataroot, self.infos[i]['lidar_path'])
-            disparity_path = os.path.join(self.dataroot, self.infos[i]['disparity_path'])
+            # disparity_path = os.path.join(self.dataroot, self.infos[i]['disparity_path'])
 
-            disp_point = np.load(disparity_path)
-            zeros = np.zeros((disp_point.shape[0], 1))
-            disp_point = np.concatenate((disp_point, zeros), axis=1)
+            # disp_point = np.load(disparity_path)
+            # zeros = np.zeros((disp_point.shape[0], 1))
+            # disp_point = np.concatenate((disp_point, zeros), axis=1)
 
-            current_point = np.load(lidar_path)
-            ones = np.ones((current_point.shape[0], 1))
-            current_point = np.concatenate((current_point, ones), axis=1)
+            current_point = np.load(lidar_path)[:,:4]
+            # ones = np.ones((current_point.shape[0], 1))
+            # current_point = np.concatenate((current_point, ones), axis=1)
             
-            current_point = np.concatenate((disp_point, current_point), axis=0)
+            # current_point = np.concatenate((disp_point, current_point), axis=0)
             current_point = torch.from_numpy(current_point)
             infos.append(self.infos[i])
             points.append(current_point)
@@ -710,7 +707,7 @@ class DatasetDSEC_lidar(torch.utils.data.Dataset):
         return future_egomotion.unsqueeze(0)
 
     def __len__(self):
-        return len(self.infos)
+        return len(self.dataloader_index)
 
     def get_temporal_voxels(self,index):
         if self.cfg.GEN.GEN_VOXELS:
@@ -798,14 +795,110 @@ class DatasetDSEC_lidar(torch.utils.data.Dataset):
 
         return target_idx_list
 
+    def get_events(self, current_idx, idx_list, time_stmp):
+        # ************DEPRECATED********************
+        event_tmp = {}
+        evs_norm_list = []
+        evs_loc_list = []
+        evs_stmp = []
+        for i in idx_list:
+            
+            if i != current_idx: continue
+            # pdb.set_trace()
+            event_paths = self.infos[i]['event_paths']
+            for i in range(len(event_paths)):
+                event_path = event_paths[i]
+                events = np.load(event_path, allow_pickle=True)
+                ev_loc = events['ev_loc']
+                ev_loc = np.hstack((np.zeros((ev_loc.shape[0], 1)), ev_loc))
+                # ev_loc = np.hstack((i * np.ones((ev_loc.shape[0], 1)), ev_loc))
+                evs_norm_list.append(torch.from_numpy(events['evs_norm']))
+                evs_loc_list.append(torch.from_numpy(ev_loc))
+                evs_stmp.append(events['event_timestamp']+time_stmp)
+        event_tmp['evs_norm'] = evs_norm_list
+        event_tmp['ev_loc'] = evs_loc_list
+        event_tmp['evs_stmp'] = evs_stmp
+        return event_tmp
     
-    def _build_dummy_event(self):
-        channels = getattr(self.cfg.MODEL.EVENT, 'IN_CHANNELS', 0)
-        if channels <= 0:
-            channels = 2 * getattr(self.cfg.MODEL.EVENT, 'BINS', 10)
-        h, w = self.cfg.IMAGE.FINAL_DIM
-        dummy = torch.zeros(1, 1, channels, h, w, dtype=torch.float32)
-        return dummy, 0
+    def get_events_grid(self, current_idx, idx_list, index_flow, time_stmp):
+        evs_dict = {
+            'events': [],
+            # 'events_grid': [],
+            # 'event_shape': {},
+            # 'evs_stmp' : [],
+            }
+        total_events_loaded = 0
+        for i in idx_list:
+            
+            event_paths = self.infos[i]['event_grid_paths']
+            dat = np.load(event_paths[0], allow_pickle=True)
+            voxel = dat['event_grid']
+            curr_time_stmp = dat['event_timestamp']+time_stmp
+            voxel = voxel[index_flow-4:index_flow+1]
+            curr_time_stmp = curr_time_stmp[index_flow-4:index_flow+1]
+            voxel = torch.from_numpy(voxel)
+            # voxel = voxel.unsqueeze(0)
+            _, B, H, W = voxel.shape
+            if self.event_scale != 1:
+                voxel =  F.interpolate(voxel, size=(int(H * self.event_scale), int(W * self.event_scale)))
+            voxel = voxel.squeeze(0).numpy()
+            if self.event_scale != 1:
+                new_shape = [int(H * self.event_scale), int(W * self.event_scale)]
+            else:
+                new_shape = [H, W]
+            voxel = torch.from_numpy(voxel)
+            event_frames = voxel.unsqueeze(1)
+            evs_dict['event_shape'] = new_shape    
+            evs_dict['events_grid'] = voxel
+            evs_dict['evs_stmp'] = curr_time_stmp
+            evs_dict['event'] = {'frames': event_frames}
+            evs_dict['event_voxel_count'] = event_frames.shape[0]
+            # for j in range(index_flow-4, index_flow+1):
+            #     # start_time = time.time()
+            #     event_path = event_paths[j]
+                
+                    
+            #     ### resize image
+            #     # if self.event_scale != 1:
+            #     voxel = torch.from_numpy(voxel)
+            #     voxel = voxel.unsqueeze(0)
+            #     _, B, H, W = voxel.shape
+            #     if self.event_scale != 1:
+            #         voxel =  F.interpolate(voxel, size=(int(H * self.event_scale), int(W * self.event_scale)))
+            #     voxel = voxel.squeeze(0).numpy()
+            #     # end_time = time.time()
+            #     # print(j,'time cost', end_time - start_time)
+            #     if self.event_scale != 1:
+            #         new_shape = [int(H * self.event_scale), int(W * self.event_scale)]
+            #     else:
+            #         new_shape = [H, W]
+            #     voxel = torch.from_numpy(voxel)
+            #     evs_dict['event_shape'] = new_shape    
+            #     evs_dict['events_grid'].append(voxel)
+            #     evs_dict['evs_stmp'].append(curr_time_stmp)
+            #     total_events_loaded += 1
+        return evs_dict
+
+    def _event_grid_to_frames(self, event_grid_list):
+        """
+        Convert a list of event voxel grids into a tensor shaped as [S, N, C, H, W]
+        so that downstream components can consume it directly.
+        """
+        if not event_grid_list:
+            return None
+        frame_tensors = []
+        for grid in event_grid_list:
+            if isinstance(grid, np.ndarray):
+                tensor = torch.from_numpy(grid)
+            else:
+                tensor = torch.as_tensor(grid)
+            frame_tensors.append(tensor.float())
+        try:
+            frames = torch.stack(frame_tensors, dim=0)
+        except RuntimeError:
+            return None
+        frames = frames.unsqueeze(1)  # camera dimension -> currently single camera
+        return frames
     
     def inverse_T(self, T):
         assert T.shape == (4, 4)
@@ -835,6 +928,7 @@ class DatasetDSEC_lidar(torch.utils.data.Dataset):
                 img_path = img_infos[key]
                 for j in range(1):
                     img_path = img_path.replace(img_path.split('/')[-2], 'image_%d' % j)
+                    img_path = img_path.split('/waymo_processed_data_v4')[-1]
                     img_path = os.path.join(self.dataroot, img_path)
 
                     if load_images:
@@ -872,8 +966,8 @@ class DatasetDSEC_lidar(torch.utils.data.Dataset):
 
         for j in range(1):
             cam_name = 'camera_%s' % str(j)
-            # new_ex_param = np.linalg.inv(img_infos['image_%d_extrinsic' % j])
-            new_ex_param = self.inverse_T(img_infos['image_%d_extrinsic' % j])
+            new_ex_param = np.linalg.inv(img_infos['image_%d_extrinsic' % j])
+            # new_ex_param = img_infos['image_%d_extrinsic' % j]
             new_ex_param = torch.from_numpy(new_ex_param).unsqueeze(0).unsqueeze(0)
             new_in_param = img_infos['image_%d_intrinsic' % j].unsqueeze(0).unsqueeze(0)
             imgs_dict['extrinsic'] = new_ex_param
@@ -963,25 +1057,147 @@ class DatasetDSEC_lidar(torch.utils.data.Dataset):
             data_dict['gt_bboxes_3d'] = gt_bboxes_3d
             data_dict['gt_labels_3d'] = gt_labels_3d
 
-        # # 处理gt_boxes_prosed（仅在存在gt_len时）
-        # if 'gt_len' in data_dict and len(data_dict['gt_len']) > 0:
-        #     gt_boxes_lidar_list = []
-        #     gt_len = data_dict['gt_len']
-        #     for i in range(len(gt_len)):
-        #         if i == 0:
-        #             gt_data = data_dict['gt_boxes'][:gt_len[0]] if len(data_dict['gt_boxes']) > 0 else np.zeros((0, data_dict['gt_boxes'].shape[1] if len(data_dict['gt_boxes'].shape) > 1 else 9), dtype=np.float32)
-        #         else:
-        #             gt_data = data_dict['gt_boxes'][gt_len[i-1]:gt_len[i]] if len(data_dict['gt_boxes']) > gt_len[i-1] else np.zeros((0, data_dict['gt_boxes'].shape[1] if len(data_dict['gt_boxes'].shape) > 1 else 9), dtype=np.float32)
-        #         gt_boxes_lidar_list.append(gt_data)
-        #     data_dict['gt_boxes_prosed'] = gt_boxes_lidar_list
-        # else:
-        #     data_dict['gt_boxes_prosed'] = []
+        # 处理gt_boxes_prosed（仅在存在gt_len时）
+        if 'gt_len' in data_dict and len(data_dict['gt_len']) > 0:
+            gt_boxes_lidar_list = []
+            gt_len = data_dict['gt_len']
+            for i in range(len(gt_len)):
+                if i == 0:
+                    gt_data = data_dict['gt_boxes'][:gt_len[0]] if len(data_dict['gt_boxes']) > 0 else np.zeros((0, data_dict['gt_boxes'].shape[1] if len(data_dict['gt_boxes'].shape) > 1 else 9), dtype=np.float32)
+                else:
+                    gt_data = data_dict['gt_boxes'][gt_len[i-1]:gt_len[i]] if len(data_dict['gt_boxes']) > gt_len[i-1] else np.zeros((0, data_dict['gt_boxes'].shape[1] if len(data_dict['gt_boxes'].shape) > 1 else 9), dtype=np.float32)
+                gt_boxes_lidar_list.append(gt_data)
+            data_dict['gt_boxes_prosed'] = gt_boxes_lidar_list
+        else:
+            data_dict['gt_boxes_prosed'] = []
         
         return data_dict
 
+    def get_data_flow(self, data_dict, target_idx_list, flow_idx):
+        """
+        将事件数据转换为流式数据格式
+        
+        Args:
+            data_dict: 包含以下键的字典：
+                - 'points': 点云数据
+                - 'events_grid': 事件网格数据列表（来自 get_events_grid）
+                - 'evs_stmp': 事件时间戳列表
+            target_idx_list: 目标索引列表
+        
+        Returns:
+            data_dict: 更新后的字典，包含 'flow_data' 键，删除了 'points', 'evs_stmp', 'events_grid'
+        """
+        temp_flow = []
+        data_split_interval = self.num_speed//(1000//self.event_speed)
+        if data_split_interval <= 0:
+            return data_dict
+        
+        # target_idx_list is a list, use the first element as the base index
+        base_idx = target_idx_list[0] if isinstance(target_idx_list, (list, np.ndarray)) else target_idx_list
+        # base timestamp (microseconds) for this flow window - used to normalize lidar timestamps to seconds
+        # base_us = self.infos[base_idx]['time_stamp']
+        
+        # 确保使用正确的键名（get_events_grid 返回 'events_grid'）
+        event_grid_key = 'events_grid' if 'events_grid' in data_dict else 'event_grid'
+        if event_grid_key not in data_dict or len(data_dict[event_grid_key]) == 0:
+            return data_dict
+        event_grid = data_dict[event_grid_key]
+        evs_stmp = data_dict['evs_stmp']
 
+        # print(base_us%1e11, evs_stmp[0]%1e11)
+        # 使用实际的事件网格数量，而不是假设的 event_speed//10
+        # 这样可以适配 TIME_RECEPTIVE_FIELD 的限制
+        actual_event_num = len(event_grid)
+        if actual_event_num == 0:
+            return data_dict
+        
+        # 根据实际事件数量计算每个窗口的事件数量
+        target_flow_range = actual_event_num // data_split_interval
+        if target_flow_range <= 0:
+            # 如果实际事件数量太少，每个窗口至少分配1个事件
+            target_flow_range = 1
+        base_us = evs_stmp[0]
+        
+        flow_dict = {
+            'flow_events': [],
+            'flow_lidar': [],
+            'events_stmp': [],
+            'lidar_stmp': [],
+        }
+        
+        def get_data(idx):
+            # 确保访问范围在有效范围内
+            if idx == 4 and self.use_lidar:
+                if 'points' in data_dict:
+                    flow_dict['flow_lidar'].append(data_dict['points'])
+                    # normalize lidar timestamp to seconds relative to base_us
+                    flow_dict['lidar_stmp'].append(0.0)
+            elif idx == 9 and self.use_lidar:
+                # 确保 base_idx+1 有效
+                if base_idx + 1 < len(self.infos):
+                    _, points = self.get_infos_and_points([base_idx+1])
+                    flow_dict['flow_lidar'].append(points[0])
+                    # normalize next-frame lidar timestamp to seconds relative to base_us
+                    flow_dict['lidar_stmp'].append(0.1)
+                    # flow_dict['lidar_stmp'].append((self.infos[base_idx+1]['time_stamp'] - base_us) / 1e6/1000)
+                
+            for event_idx in range(5):
+                # 确保索引有效
+                # if event_idx < 0 or event_idx >= len(event_grid) or event_idx >= len(evs_stmp):
+                #     break
+                
+                # 在第一个事件时添加初始点云（如果启用lidar）
+                
+                        # flow_dict['lidar_stmp'].append((self.infos[base_idx]['time_stamp'] - base_us) / 1e6/1000)
+                # 如果事件数量足够多（>=10），在第10个事件时添加下一个时间步的点云
+                # 否则在最后一个事件时添加
+                
+                flow_dict['flow_events'].append(event_grid[event_idx])
+                # Normalize event timestamps to seconds relative to base_us for ODE alignment.
+                event_ts_rel = (evs_stmp[event_idx] - base_us) / 1e6/1000
+                flow_dict['events_stmp'].append(event_ts_rel)
+                
+            flow_dict['target_timestamp'] = flow_dict['events_stmp'][-1:]
+            intrinsics = data_dict['intrinsics']
+            extrinsics = data_dict['extrinsics']
+            n_events = len(flow_dict['events_stmp'])
+            # assume intrinsics/extrinsics are numpy arrays with shape (T, 1, 3, 3) and (T, 1, 4, 4)
+            # take the first time-step and repeat it per event along axis=0 to obtain (n_events, 1, 3, 3)/(n_events, 1, 4, 4)
+            base_intrinsics = intrinsics[0:1]
+            base_extrinsics = extrinsics[0:1]
+            intrinsics = np.repeat(base_intrinsics, n_events, axis=0)
+            extrinsics = np.repeat(base_extrinsics, n_events, axis=0)
+            flow_dict['intrinsics'] = intrinsics
+            flow_dict['extrinsics'] = extrinsics
+        
+        # 处理当前窗口
+        get_data(flow_idx)
+        
+        # 确保至少有一些数据
+        if len(flow_dict['flow_events']) > 0:
+            flow_dict['curr_time_stmp'] = flow_dict['events_stmp'][-1]
+            temp_flow.append(flow_dict)
+    
+        # 如果没有任何有效的流数据，返回原始字典
+        if len(temp_flow) == 0:
+            return data_dict
+        
+        data_dict['flow_data'] = temp_flow
+        # 只在points存在时删除（当USE_LIDAR=False时，points可能不存在）
+        if 'points' in data_dict:
+            del data_dict['points']
+            del data_dict['evs_stmp']
+        if event_grid_key in data_dict:
+            del data_dict[event_grid_key]
+        return data_dict
+    
 
     def __getitem__(self, index):
+        # print(self.temp_counter, index)
+
+        self.temp_counter += 1
+        index_str = self.dataloader_index[index].split("_")
+        index, index_flow = int(index_str[0]), int(index_str[1])
         target_idx_list = [index]
         current_info = copy.deepcopy(self.infos[index])
         # 获取时序帧索引：从 -(receptive_field-1) 到 0（当前帧）
@@ -1022,7 +1238,56 @@ class DatasetDSEC_lidar(torch.utils.data.Dataset):
                 empty_inst = torch.zeros((1, self.bev_dimension[0], self.bev_dimension[1]), dtype=torch.long)
                 segmentation_list.append(empty_seg)
                 instance_list.append(empty_inst)
+        
+        # 堆叠时序标签
+        if len(segmentation_list) > 0:
+            input_dict['segmentation'] = torch.cat(segmentation_list, dim=0)  # (T, 1, H, W)
+            input_dict['instance'] = torch.cat(instance_list, dim=0)  # (T, H, W)
+        
+        # 生成future_egomotion（时序）
+        future_egomotion_list = []
+        for i, target_idx in enumerate(target_idx_list):
+            if i < len(target_idx_list) - 1 and target_idx < len(self.infos) - 1:
+                # 计算当前帧到下一帧的ego motion
+                # 公式：T_{t+1}^{-1} * T_t（与NuScenes格式一致）
+                current_pose = self.infos[target_idx]['pose']
+                next_pose = self.infos[target_idx + 1]['pose']
+                next_pose_inv = np.linalg.inv(next_pose)
+                future_egomotion = next_pose_inv @ current_pose
+                future_egomotion[3, :3] = 0.0
+                future_egomotion[3, 3] = 1.0
+                # 转换为6DoF向量
+                future_egomotion_vec = mat2pose_vec(torch.from_numpy(future_egomotion).float())
+                future_egomotion_list.append(future_egomotion_vec.unsqueeze(0))
+            else:
+                # 最后一帧，使用单位变换
+                future_egomotion_list.append(torch.zeros(1, 6))
+        
+        if len(future_egomotion_list) > 0:
+            input_dict['future_egomotion'] = torch.cat(future_egomotion_list, dim=0)  # (T, 6)
+        
+        # 生成camera_timestamp和target_timestamp
+        camera_timestamp_list = []
+        for target_idx in target_idx_list:
+            if target_idx < len(self.infos):
+                timestamp = self.infos[target_idx].get('time_stamp', 0)
+                camera_timestamp_list.append(timestamp)
+            else:
+                camera_timestamp_list.append(0)
+        
+        if len(camera_timestamp_list) > 0:
+            camera_timestamps = np.array(camera_timestamp_list, dtype=np.float64)
+            # 归一化：相对于第一帧的时间戳（转换为秒）
+            camera_timestamps = (camera_timestamps - camera_timestamps[0]) / 1e6
+            input_dict['camera_timestamp'] = torch.from_numpy(camera_timestamps).float()  # (T,)
 
+        # # 为 LiDAR 分支提供时间戳（无 STPN/BESTI 时使用与相机一致的时间轴）
+        # if self.use_lidar and not (self.cfg.MODEL.LIDAR.USE_STPN or self.cfg.MODEL.LIDAR.USE_BESTI):
+        #     if 'camera_timestamp' in input_dict:
+        #         input_dict['lidar_timestamp'] = input_dict['camera_timestamp'].clone()
+        #     else:
+        #         # 回退为零时间轴，避免下游缺键
+        #         input_dict['lidar_timestamp'] = torch.zeros(len(target_idx_list), dtype=torch.float32)
         
         # target_timestamp：未来预测的目标时间（秒）
         n_future = getattr(self.cfg, 'N_FUTURE_FRAMES', 0)
@@ -1031,6 +1296,7 @@ class DatasetDSEC_lidar(torch.utils.data.Dataset):
         else:
             target_time = 0.0
         input_dict['target_timestamp'] = torch.tensor([target_time], dtype=torch.float32)
+        
 
         # 始终为事件/几何提供 intrinsics / extrinsics（基于标定文件），避免下游为 None
         # 这里只使用当前帧的相机参数，并在时间维度上复制
@@ -1051,7 +1317,19 @@ class DatasetDSEC_lidar(torch.utils.data.Dataset):
         if 'target_point' not in input_dict:
             # 默认目标点
             input_dict['target_point'] = torch.tensor([0., 0.])
+        
+        if self.use_event:
+            # 加载事件数据，与是否使用图像无关
+            # ev_dict = self.get_events(index, target_idx_list, time_stmp=current_info['time_stamp'])
+            ev_dict = self.get_events_grid(index, target_idx_list, index_flow, time_stmp=current_info['time_stamp'])
             
+            input_dict.update(ev_dict)
+            
+            # event_frames = self._event_grid_to_frames(ev_dict.get('events_grid', []))
+            # if event_frames is not None:
+            #     input_dict['event'] = {'frames': event_frames}
+            #     input_dict['event_voxel_count'] = len(ev_dict.get('events_grid', []))
+        
         # breakpoint()
         if self.use_image:
             # TODO: add the corresponding image here
@@ -1063,36 +1341,52 @@ class DatasetDSEC_lidar(torch.utils.data.Dataset):
             input_dict.update(cam_param_dict)
         
         # 如果需要流式数据格式，调用 get_data_flow（不依赖于 use_image）
-        
+        if self.use_flow_data:
+            if 'events_grid' in input_dict and 'evs_stmp' in input_dict:
+                if len(input_dict['events_grid']) > 0 and len(input_dict['evs_stmp']) > 0:
+                    input_dict = self.get_data_flow(input_dict, target_idx_list, index_flow)
+            else:
+                # 如果 events_grid 不存在，尝试加载事件数据
+                if self.use_event:
+                    # ev_dict = self.get_events(index, target_idx_list, time_stmp=current_info['time_stamp'])
+                    ev_dict = self.get_events_grid(index, target_idx_list, index_flow, time_stmp=current_info['time_stamp'])
+                    input_dict.update(ev_dict)
+                    if 'events_grid' in input_dict and 'evs_stmp' in input_dict:
+                        if len(input_dict['events_grid']) > 0 and len(input_dict['evs_stmp']) > 0:
+                            input_dict = self.get_data_flow(input_dict, target_idx_list, index_flow)
 
-        if 'annos' in current_info:
+        if 'seq_annos' in current_info:
 
-            # gt_boxes_lidar = []
-            # gt_len = []
-            # gt_len_index = 0
-            # anno_names = []
-            # gt_obj_ids = []
-            annos = current_info['annos']
+            gt_boxes_lidar = []
+            gt_len = []
+            gt_len_index = 0
+            anno_names = []
+            gt_obj_ids = []
+            seq_annos_flow = copy.deepcopy(current_info['seq_annos'])
+            # seq_annos_flow = current_info['seq_annos']
             # interval = self.event_speed//self.num_speed
-            
+            seq_annos_flow = [seq_annos_flow[index_flow]]
             # if True:seq_annos_flow = [seq_annos_flow[0]]？
-            
-            gt_boxes_lidar = annos['gt_boxes_lidar']
-            gt_len = len(annos['gt_boxes_lidar'])
-            anno_names = annos['name']
-            gt_obj_ids = annos['obj_ids']
-            # print('abc', anno_names,gt_boxes_lidar)
+            for i in range(len(seq_annos_flow)):
+                annos = seq_annos_flow[i]
+                
+                gt_boxes_lidar.append(annos['gt_boxes_lidar'])
+                gt_len_index += len(annos['gt_boxes_lidar'])
+                gt_len.append(gt_len_index)
+                anno_names.append(annos['name'])
+                gt_obj_ids.append(annos['obj_ids'])
                     
-            # gt_boxes_lidar = np.concatenate(gt_boxes_lidar)
-            # gt_names = np.concatenate(anno_names)
-            # gt_len = np.array(gt_len)
-            # gt_obj_ids = np.concatenate(gt_obj_ids)
+                    
+            gt_boxes_lidar = np.concatenate(gt_boxes_lidar)
+            gt_names = np.concatenate(anno_names)
+            gt_len = np.array(gt_len)
+            gt_obj_ids = np.concatenate(gt_obj_ids)
             
                 
 
             input_dict.update({
                 # 'gt_names': annos['name'],
-                'gt_names': anno_names,
+                'gt_names': gt_names,
                 'gt_boxes': gt_boxes_lidar,
                 'gt_len': gt_len,
                 'gt_obj_ids': gt_obj_ids
@@ -1120,6 +1414,7 @@ class DatasetDSEC_lidar(torch.utils.data.Dataset):
                 'box_type_3d': LiDARInstance3DBoxes,  # 提供box类型以便解码/评估
             }
             data_dict['metas'] = [meta]  # list of dict，每个样本一个meta
+        # print('gt_names',data_dict['gt_names'])
 
         return data_dict
 
@@ -1189,7 +1484,7 @@ if __name__ == '__main__':
     CN = CfgNode
     data_cfg = CN()
     data_cfg.DATASET = CN()
-    data_cfg.DATASET.DATAROOT = '/media/switcher/sda/datasets/dsec/'
+    data_cfg.DATASET.DATAROOT = "/media/switcher/sda/datasets/evwaymo/"
     data_cfg.DATASET.IGNORE_INDEX = 255  # Ignore index when creating flow/offset labels
     data_cfg.DATASET.FILTER_INVISIBLE_VEHICLES = True  # Filter vehicles that are not visible from the cameras
     data_cfg.DATASET.SAVE_DIR = 'datas'
@@ -1217,27 +1512,37 @@ if __name__ == '__main__':
     cfg.GEN.GEN_VOXELS = True
 
     cfg.IMAGE = CN()
-    cfg.IMAGE.FINAL_DIM = (240, 360)
-    cfg.IMAGE.RESIZE_SCALE = 0.5
+    cfg.IMAGE.FINAL_DIM = (320, 480)
+    cfg.IMAGE.RESIZE_SCALE = .25
     cfg.IMAGE.TOP_CROP = 0
-    cfg.IMAGE.ORIGINAL_HEIGHT = 640  # Original input RGB camera height
-    cfg.IMAGE.ORIGINAL_WIDTH = 480  # Original input RGB camera width
+    cfg.IMAGE.ORIGINAL_HEIGHT = 1280  # Original input RGB camera height
+    cfg.IMAGE.ORIGINAL_WIDTH = 1920  # Original input RGB camera width
     cfg.IMAGE.NAMES = ['CAM_FRONT_LEFT', 'CAM_FRONT', 'CAM_FRONT_RIGHT', 'CAM_BACK_LEFT', 'CAM_BACK', 'CAM_BACK_RIGHT']
     
     cfg.MODEL = CN()
     cfg.MODEL.MODALITY = CN()
     cfg.MODEL.LIDAR = CN()
     cfg.MODEL.MODALITY.USE_LIDAR = True
-    cfg.MODEL.MODALITY.USE_CAMERA = True
+    cfg.MODEL.MODALITY.USE_CAMERA = False
     cfg.MODEL.MODALITY.USE_EVENT = True
     cfg.MODEL.LIDAR.USE_STPN = False
     cfg.MODEL.LIDAR.USE_BESTI = False
-    dsec = DatasetDSEC_lidar(data_cfg, cfg, is_train=True)
-    print(len(dsec))
-    dat = dsec[0]
+    evwaymo = DatasetEVWaymo(data_cfg, cfg, is_train=True)
+    print(len(evwaymo))
+    dat = evwaymo[0]
+    print(dat['intrinsic'])
+    print(dat['extrinsic'])
+
     for n in range(3000):
-        dat = dsec[n]
-        print('gt_names',dat['gt_names'])
-        # if len(dat['gt_names']) > 1:
-        #     print(dat['gt_names'])
+        start_time = time.time()
+        dat = evwaymo[n]
+        end_time = time.time()
+        print(n, 'time cost', end_time - start_time)
+        # dat = evwaymo[n]
+        # print(n, dat['intrinsic'])
+        # print(n, dat['extrinsic'])
+
+        # print('time cost', end_time - start_time)
+        # print('gt_names',dat['gt_names'])
+        # print(dat['flow_data'][0]['events_stmp'], dat['flow_data'][0]['lidar_stmp'])
     pass

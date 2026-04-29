@@ -31,7 +31,7 @@ class FuturePredictionODE(nn.Module):
         n_res_layers=1,
         delta_t=0.05,
     ):
-        super().__init__()
+        super(FuturePredictionODE, self).__init__()
         self.n_future = n_future
         self.n_spatial_gru = n_gru_blocks
         self.delta_t = delta_t
@@ -48,11 +48,11 @@ class FuturePredictionODE(nn.Module):
             # 每个 SpatialGRU 都把序列维度当作时间，保持未来序列的空间一致性。
             spatial_grus.append(SpatialGRU(in_channels, in_channels))
             res_blocks.append(nn.Sequential(*[Block(in_channels) for _ in range(n_res_layers)]))
-            # if i < self.n_spatial_gru - 1:
-            #     res_blocks.append(nn.Sequential(*[Block(in_channels) for _ in range(n_res_layers)]))
-            # else:
-            #     # 最后一层使用 DeepLab 头，将特征上采样/投影回解码器期望的 BEV 尺寸。
-            #     res_blocks.append(DeepLabHead(in_channels, in_channels, 128))
+            if i < self.n_spatial_gru - 1:
+                res_blocks.append(nn.Sequential(*[Block(in_channels) for _ in range(n_res_layers)]))
+            else:
+                # 最后一层使用 DeepLab 头，将特征上采样/投影回解码器期望的 BEV 尺寸。
+                res_blocks.append(DeepLabHead(in_channels, in_channels, 128))
 
         self.spatial_grus = nn.ModuleList(spatial_grus)
         self.res_blocks = nn.ModuleList(res_blocks)

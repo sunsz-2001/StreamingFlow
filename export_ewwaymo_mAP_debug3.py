@@ -8,9 +8,9 @@ import torch
 from tqdm import tqdm
 
 from streamingflow.datas.dataloaders import prepare_dataloaders
-from streamingflow.trainer_dsec_debug import TrainingModule
+from streamingflow.trainer_evwaymo_debug import TrainingModule
 from streamingflow.utils.network import preprocess_batch
-from streamingflow.config_debug import get_cfg, get_parser
+from streamingflow.config_debug_evwaymo import get_cfg, get_parser
 from mmdet3d.core.bbox.iou_calculators.iou3d_calculator import bbox_overlaps_3d
 
 import open3d as o3d
@@ -29,6 +29,7 @@ def process_flow_data(batch, cfg):
         temp_flow_data = {
             'intrinsics': [], 'extrinsics': [], 'flow_lidar': [],
             'flow_events': [], 'events_stmp': [], 'lidar_stmp': [], 'target_timestamp': [],
+            'depth_image':[],
         }
 
         for bs_idx in range(len(flow_batch)):
@@ -89,6 +90,8 @@ def gather_batch_outputs(model, batch, device, cfg=None, decode: bool = True) ->
                 points = flow_data[0]['flow_lidar']
                 lidar_timestamp = flow_data[0]['lidar_stmp']
             event = flow_data[0].get("flow_events")
+            depth_image = flow_data[0]['depth_image']
+
             if torch.is_tensor(event) and event.dim() == 5:
                 event = event.unsqueeze(2)  # [B, S, 1, C, H, W]
         else:
@@ -140,11 +143,12 @@ def gather_batch_outputs(model, batch, device, cfg=None, decode: bool = True) ->
     target_timestamp = to_device_tensor(target_timestamp, device)
     lidar_timestamp = to_device_tensor(lidar_timestamp, device)
     event = to_device_event(event, device)
+    depth_image = to_device_tensor(depth_image, device)
 
     output = model(
         batch.get("image"), intrinsics, extrinsics, batch.get("future_egomotion"),
         batch.get("padded_voxel_points"), camera_timestamps, points, lidar_timestamp,
-        target_timestamp, event=event, metas=batch.get("metas"),
+        target_timestamp, depth_image=depth_image, event=event, metas=batch.get("metas"),
     )
 
     if not decode:
@@ -216,8 +220,79 @@ def compute_ap_per_class(preds, gts, num_classes: int, iou_thr: float) -> Dict[s
     ap_results["mAP"] = float(np.mean([v for v in ap_results.values()]))
     return ap_results
 
+def save_lidar_bev_grayscale(points, save_path, x_range=(0, 51.2), y_range=(-32, 32), 
+                              resolution=0.1, max_height=3.0, normalize=True):
+    """
+    将激光雷达点云转换为BEV灰度图并按最大高度保存
+    
+    Args:
+        points: (N, 3) 点云数据 [x, y, z]
+        save_path: 保存路径 (.png)
+        x_range: x轴范围 (min, max) 单位:米
+        y_range: y轴范围 (min, max) 单位:米
+        resolution: 网格分辨率 单位:米/像素
+        max_height: 最大高度阈值 (超过此高度的点将被截断)
+        normalize: 是否归一化到0-255
+    
+    Returns:
+        bev_image: BEV灰度图像 (H, W)
+    """
+    # 1. 计算网格尺寸
+    x_min, x_max = x_range
+    y_min, y_max = y_range
+    width = int((x_max - x_min) / resolution) + 1
+    height = int((y_max - y_min) / resolution) + 1
+    
+    # 2. 初始化高度图 (用极小值填充)
+    height_map = np.full((height, width), -np.inf, dtype=np.float32)
+    
+    # 3. 过滤高度超过阈值的点
+    points_filtered = points[points[:, 2] <= max_height]
+    
+    if len(points_filtered) == 0:
+        bev_image = np.zeros((height, width), dtype=np.uint8)
+        cv2.imwrite(save_path, bev_image)
+        print(f"警告: 没有有效点云，保存空白图像到 {save_path}")
+        return bev_image
+    
+    # 4. 计算网格索引
+    x_idx = ((points_filtered[:, 0] - x_min) / resolution).astype(np.int32)
+    y_idx = ((points_filtered[:, 1] - y_min) / resolution).astype(np.int32)
+    
+    # 5. 筛选有效索引
+    valid_mask = (x_idx >= 0) & (x_idx < width) & (y_idx >= 0) & (y_idx < height)
+    x_valid = x_idx[valid_mask]
+    y_valid = y_idx[valid_mask]
+    z_valid = points_filtered[valid_mask, 2]
+    
+    # 6. 每个网格取最大高度
+    for i in range(len(x_valid)):
+        x, y, z = x_valid[i], y_valid[i], z_valid[i]
+        if z > height_map[y, x]:
+            height_map[y, x] = z
+    
+    # 7. 处理无数据的区域
+    height_map[height_map == -np.inf] = 0
+    
+    # 8. 归一化到 0-255
+    if normalize:
+        max_h = height_map.max()
+        if max_h > 0:
+            bev_image = (height_map / max_h * 255).astype(np.uint8)
+        else:
+            bev_image = np.zeros_like(height_map, dtype=np.uint8)
+    else:
+        bev_image = height_map.astype(np.uint8)
+    
+    # 9. 保存图像
+    cv2.imwrite(save_path, bev_image)
+    print(f"BEV灰度图已保存: {save_path}")
+    print(f"  尺寸: {bev_image.shape}, 有效点: {len(x_valid)}, 最大高度: {height_map.max():.2f}m")
+    
+    return bev_image
 
 def vis_point(pts, preds, gts, win_name):
+    save_lidar_bev_grayscale(pts, '/home/user/图片/3.jpg')
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(pts[:,:3])
     pred_boxes = preds[0][0].numpy()
@@ -257,6 +332,37 @@ def vis_point(pts, preds, gts, win_name):
     vis.run()
     vis.destroy_window()
     
+def visualization_points(batch, output, preds, gts, idx, save_dir, cfg):
+    # event_img     | lidar_img | event_bev_img，
+    # lidar_bev_img | pred_img  | gt_img
+
+    os.makedirs(save_dir, exist_ok=True)
+
+    # 提取数据
+    flow_data = batch['flow_data'][0][0]
+
+    def _last_item(value):
+        if isinstance(value, (list, tuple)) and len(value) > 0:
+            return _last_item(value[-1])
+        return value
+
+    events = _last_item(flow_data.get('flow_events'))
+    if torch.is_tensor(events):
+        events = events.cpu().numpy()
+    elif isinstance(events, np.ndarray):
+        events = events
+    else:
+        raise TypeError(f"Unexpected flow_events type: {type(events)}")
+
+    points = _last_item(flow_data.get('flow_lidar'))
+    if torch.is_tensor(points):
+        points = points.cpu().numpy()
+    elif isinstance(points, np.ndarray):
+        points = points
+    else:
+        return 
+    if True and len(points)!=0:
+        vis_point(points,preds,gts, batch['sequence_name'][-1])
 
 def save_dsec_visualization(batch, output, preds, gts, idx, save_dir, cfg):
     # event_img     | lidar_img | event_bev_img，
@@ -379,8 +485,10 @@ def export_and_eval(_cfg_path: str, checkpoint: str, dataroot: str, iou_thr: flo
             for boxes, scores, labels in preds:
                 mask = scores >= score_thr
                 vis_preds.append((boxes[mask], scores[mask], labels[mask]))
-        if visualize and batch_idx % vis_interval == 0 and batch_idx>0:  
+        if False and visualize and batch_idx % vis_interval == 0 and batch_idx>0:  
             save_dsec_visualization(batch, output, vis_preds, gts, batch_idx, vis_save_path, cfg)
+        elif visualize and batch_idx % vis_interval == 0:
+            visualization_points(batch, output, vis_preds, gts, batch_idx, vis_save_path, cfg)
 
         for idx, (pred, gt) in enumerate(zip(preds, gts)):
             seq_name = batch.get('sequence_name', ['unknown'])[idx] if 'sequence_name' in batch else f'seq_{idx}'
@@ -414,22 +522,16 @@ def export_and_eval(_cfg_path: str, checkpoint: str, dataroot: str, iou_thr: flo
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="DSEC mAP evaluation")
-    parser.add_argument("--config-file", default="/home/user/sunsz/StreamingFlow/streamingflow/configs/dsec_event_lidar.yaml")
-    parser.add_argument("--checkpoint", default='/home/user/sunsz/StreamingFlow/logs/dsec_event_lidar_eval_4/epoch=49-step=52499.ckpt')
-    parser.add_argument("--dataroot", default='/media/switcher/sda/datasets/dsec/')
-    parser.add_argument("--iou-thr", type=float, default=0.1)
-    parser.add_argument("--score-thr", type=float, default=0.001)
+    parser = argparse.ArgumentParser(description="EVWaymo mAP evaluation")
+    parser.add_argument("--config-file", default="/home/user/sunsz/StreamingFlow/streamingflow/configs/evwaymo_event_lidar.yaml")
+    parser.add_argument("--checkpoint", default='/home/user/sunsz/StreamingFlow/logs/evwaymo_event_wolidar_wonode_9/epoch=19-step=7520.ckpt')
+    parser.add_argument("--dataroot", default='/media/switcher/sda/datasets/evwaymo/')
+    parser.add_argument("--iou-thr", type=float, default=0.5)
+    parser.add_argument("--score-thr", type=float, default=0.1)
     parser.add_argument("--visualize", default=False,action="store_true", help="Enable visualization")
-    parser.add_argument("--vis-interval", type=int, default=29, help="Visualize every N batches")
-    parser.add_argument("--vis-save-path", default="dsec_visualize", help="Save directory")
+    parser.add_argument("--vis-interval", type=int, default=20, help="Visualize every N batches")
+    parser.add_argument("--vis-save-path", default="evwaymo_visualize", help="Save directory")
     args = parser.parse_args()
     export_and_eval(args.config_file, args.checkpoint, args.dataroot, args.iou_thr,
                     args.score_thr, args.visualize, args.vis_interval, args.vis_save_path)
-
-
-
-
-
-
 

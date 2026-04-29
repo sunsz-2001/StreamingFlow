@@ -222,6 +222,7 @@ def prepare_dataloaders(cfg, return_dataset=False):
             traindata, batch_size=cfg.BATCHSIZE, shuffle=True, num_workers=nworkers, 
             pin_memory=True, drop_last=True, collate_fn=dsec_collate_fn
         )
+        # valloader = None
         valloader = torch.utils.data.DataLoader(
             valdata, batch_size=cfg.BATCHSIZE, shuffle=False, num_workers=nworkers, 
             pin_memory=True, drop_last=False, collate_fn=dsec_collate_fn)

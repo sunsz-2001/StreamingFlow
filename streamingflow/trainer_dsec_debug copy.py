@@ -3,8 +3,8 @@ import torch.nn as nn
 import numpy as np
 import pytorch_lightning as pl
 
-from streamingflow.config_debug_evwaymo import get_cfg
-from streamingflow.models.streamingflow_evwaymo import streamingflow_evwaymo as streamingflow
+from streamingflow.config_debug import get_cfg
+from streamingflow.models.streamingflow import streamingflow as streamingflow
 from streamingflow.losses import SpatialRegressionLoss, SegmentationLoss, HDmapLoss, DepthLoss
 from streamingflow.metrics import IntersectionOverUnion, PanopticMetric, PlanningMetric
 from streamingflow.utils.geometry import cumulative_warp_features_reverse, cumulative_warp_features
@@ -108,14 +108,13 @@ class TrainingModule(pl.LightningModule):
 
         self.training_step_count = 0
 
-    def shared_step(self, batch, is_train, batch_index):
+    def shared_step(self, batch, is_train):
         image = batch.get('image')
         for n in range(len(batch['flow_data'])):
             if batch['flow_data'][n][0]['events_stmp'][0] <0.05:
                 batch['flow_data'][n][0]['lidar_stmp'] = [.0]
             elif batch['flow_data'][n][0]['events_stmp'][0] >0.05:
                 batch['flow_data'][n][0]['lidar_stmp'] = [.1]
-
                 # batch['flow_data'][n][0]['lidar_stmp'] *= .1
         # print('seq_name', batch['sequence_name'])
         # print(batch['flow_data'][0][0]['events_stmp'], batch['flow_data'][1][0]['events_stmp'])
@@ -131,7 +130,6 @@ class TrainingModule(pl.LightningModule):
             'events_stmp':[],
             'lidar_stmp':[],
             'target_timestamp':[],
-            'depth_image':[],
             }
             for bs_idx in range(len(flow_batch)):
                 tmp = flow_batch[bs_idx][flow_frame]
@@ -183,7 +181,6 @@ class TrainingModule(pl.LightningModule):
             B = len(image)
         elif self.cfg.MODEL.MODALITY.USE_EVENT and batch.get('event') is not None:
             event = flow_data[0]['flow_events']
-            depth_image = flow_data[0]['depth_image']
             if torch.is_tensor(event) and event.dim() == 5:
                 event = event.unsqueeze(2)  # [B, S, 1, C, H, W]
 
@@ -233,14 +230,12 @@ class TrainingModule(pl.LightningModule):
 
         # Forward pass
         # event = batch['event'] if self.cfg.MODEL.MODALITY.USE_EVENT else None
-
         output = self.model(
             image, intrinsics, extrinsics, future_egomotion, padded_voxel_points,camera_timestamps, points,lidar_timestamps,target_timestamp,
-            depth_image=depth_image, image_hi=batch.get('image_hi'), intrinsics_hi=batch.get('intrinsics_hi'), extrinsics_hi=batch.get('extrinsics_hi'),
+            image_hi=batch.get('image_hi'), intrinsics_hi=batch.get('intrinsics_hi'), extrinsics_hi=batch.get('extrinsics_hi'),
             camera_timestamp_hi=batch.get('camera_timestamp_hi'), event=event, metas=metas
         )
-        # print('yes_forward', batch_index, batch['camera_timestamp'].device)
-        
+
         #####
         # Loss computation
         #####
@@ -537,8 +532,7 @@ class TrainingModule(pl.LightningModule):
         self.logger.experiment.add_video(name, visualisation_video, global_step=self.training_step_count, fps=2)
 
     def training_step(self, batch, batch_idx):
-        # print('yes_load', batch_idx, batch['camera_timestamp'].device)
-        output, labels, loss = self.shared_step(batch, True, batch_idx)
+        output, labels, loss = self.shared_step(batch, True)
         self.training_step_count += 1
         
         # DIAGNOSIS: 保存 loss 信息供 backward 后检查

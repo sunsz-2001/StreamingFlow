@@ -1,4 +1,5 @@
 import os
+from re import S
 from PIL import Image
 import pickle 
 import io
@@ -145,13 +146,13 @@ class DatasetEVWaymo(torch.utils.data.Dataset):
         self.class_names = ['Vehicle', 'Cyclist', 'Pedestrian']
         self.temp_counter = 0
 
-
-
     def get_scenes(self):
 
         # split_dir = os.path.join(self.dataroot, 'train_test.txt')
         # split_dir = os.path.join(self.dataroot, 'detection_' + 'train' + '_sample_new.txt')
         split_dir = os.path.join(self.dataroot, self.mode + '.txt')
+        # split_dir = os.path.join(self.dataroot,  'val.txt')
+        # split_dir = os.path.join(self.dataroot,  'val2.txt')
         sample_sequence_list = [x.strip().split('.')[0] for x in open(split_dir).readlines()]
 
         self.infos = []
@@ -181,7 +182,14 @@ class DatasetEVWaymo(torch.utils.data.Dataset):
                 infos = infos[1:]
                 
                 for i in range(len(infos)):
+                    # print(len(infos[i]['annos']))
+                    if len(infos[i]['annos']) <10:
+                        # print('dirty data!')
+                        continue
                     new_info = copy.deepcopy(infos[i])
+                    new_info['depth_image_path'] = os.path.join(self.dataroot,
+                        new_info['sequence_name'],'depth_images',
+                        f"{str(new_info['sample_idx']).zfill(4)}_depth.png")
                     for n in range(self.num_speed//10):
                         # if n>0: continue
                         flow_idx = new_info['flow_list'][n]
@@ -216,11 +224,17 @@ class DatasetEVWaymo(torch.utils.data.Dataset):
                     new_infos.append(new_info)
                 infos = new_infos
             else:
+                
                 new_infos = []
                 infos = infos[1:]
                 
                 for i in range(len(infos)):
+                    if len(infos[i]['annos']) <10:
+                        continue
                     new_info = copy.deepcopy(infos[i])
+                    new_info['depth_image_path'] = os.path.join(self.dataroot,
+                        new_info['sequence_name'],'depth_images',
+                        f"{str(new_info['sample_idx']).zfill(4)}_depth.png")
                     for n in range(self.num_speed//10):
                         # if n>0: continue
                         flow_idx = new_info['flow_list'][n]
@@ -258,16 +272,6 @@ class DatasetEVWaymo(torch.utils.data.Dataset):
         
         self.infos.extend(waymo_infos[:])
         
-        
-    def check_sequence_name_with_all_version(self, seq_file):
-        if '_with_camera_labels' not in seq_file and not os.path.exists(seq_file):
-            seq_file = seq_file[:-9] + '_with_camera_labels.tfrecord'
-        if '_with_camera_labels' in seq_file and not os.path.exists(seq_file):
-            seq_file = seq_file.replace('_with_camera_labels', '')
-
-        return seq_file
-
-
     def get_resizing_and_cropping_parameters(self):
         original_height, original_width = self.cfg.IMAGE.ORIGINAL_HEIGHT, self.cfg.IMAGE.ORIGINAL_WIDTH
         final_height, final_width = self.cfg.IMAGE.FINAL_DIM
@@ -291,222 +295,6 @@ class DatasetEVWaymo(torch.utils.data.Dataset):
                 'crop': crop,
                 }
 
-    def get_lidar_range_data(self, sample_rec, nsweeps, min_distance):
-        """Returns at most nsweeps of lidar in the ego frame."""
-        if self.cfg.GEN.GEN_RANGE:
-            points = np.zeros((5, 0))
-            V = 35000 * nsweeps
-            ref_sd_token = sample_rec['data']['LIDAR_TOP']
-            ref_sd_rec = self.nusc.get('sample_data', ref_sd_token)
-            ref_pose_rec = self.nusc.get('ego_pose', ref_sd_rec['ego_pose_token'])
-            ref_cs_rec = self.nusc.get('calibrated_sensor', ref_sd_rec['calibrated_sensor_token'])
-            ref_time = 1e-6 * ref_sd_rec['timestamp']
-
-            car_from_global = transform_matrix(ref_pose_rec['translation'], Quaternion(ref_pose_rec['rotation']),
-                                                inverse=True)
-
-            sample_data_token = sample_rec['data']['LIDAR_TOP']
-            current_sd_rec = self.nusc.get('sample_data', sample_data_token)
-            sample_sd_rec = current_sd_rec
-            for _ in range(nsweeps):
-                current_pc = LidarPointCloud.from_file(os.path.join(self.nusc.dataroot, current_sd_rec['filename']))
-                current_pc.remove_close(min_distance)
-
-                current_pose_rec = self.nusc.get('ego_pose', current_sd_rec['ego_pose_token'])
-                global_from_car = transform_matrix(current_pose_rec['translation'],
-                                                    Quaternion(current_pose_rec['rotation']), inverse=False)
-
-                current_cs_rec = self.nusc.get('calibrated_sensor', current_sd_rec['calibrated_sensor_token'])
-                car_from_current = transform_matrix(current_cs_rec['translation'], Quaternion(current_cs_rec['rotation']),
-                                                    inverse=False)
-
-                trans_matrix = reduce(np.dot, [car_from_global, global_from_car, car_from_current])
-                current_pc.transform(trans_matrix)
-
-                time_lag = ref_time - 1e-6 * current_sd_rec['timestamp']
-                times = time_lag * np.ones((1, current_pc.nbr_points()))
-
-                new_points = np.concatenate((current_pc.points, times), 0)
-                points = np.concatenate((points, new_points), 1)
-
-                if current_sd_rec['prev'] == '':
-                    break
-                else:
-                    current_sd_rec = self.nusc.get('sample_data', current_sd_rec['prev'])
-                    
-                    
-                    
-            if points.shape[1] > V:
-                points = points[:,:V]
-            elif points.shape[0] < V:
-                points = np.pad(points,[(0,0),(0, V-points.shape[1])],mode='constant')
-            range_view = range_projection(points.transpose(1,0),  
-                                        self.rv_config['range_image']['height'], self.rv_config['range_image']['width'],
-                                        self.rv_config['range_image']['fov_up'], self.rv_config['range_image']['fov_down'],
-                                        self.rv_config['range_image']['max_range'], self.rv_config['range_image']['min_range'])
-
-            rv_file_name = os.path.split(sample_sd_rec['filename'])[-1] 
-
-        else:
-            sample_data_token = sample_rec['data']['LIDAR_TOP']
-            sample_sd_rec = self.nusc.get('sample_data', sample_data_token)
-            range_view = np.load(os.path.join(self.dataroot,'range_nusc',sample_sd_rec['channel'], os.path.split(sample_sd_rec['filename'])[-1]+'.npy'))                           
-        return torch.from_numpy(range_view).unsqueeze(0).to(torch.float32)
-    
-    def get_depth_from_lidar(self, lidar_sample, cam_sample):
-  
-        points, coloring, im = self.nusc_exp.map_pointcloud_to_image(lidar_sample['token'], cam_sample['token'])
-        cam_file_name = os.path.split(cam_sample['filename'])[-1]
-        tmp_cam = np.zeros((self.cfg.IMAGE.ORIGINAL_HEIGHT, self.cfg.IMAGE.ORIGINAL_WIDTH))
-        points = points.astype(int)
-        tmp_cam[points[1, :], points[0,:]] = coloring
-
-        return tmp_cam
-
-    def get_input_data(self, rec):
-        """Get camera images, intrinsics, and extrinsics for a given sample."""
-        images = []
-        intrinsics = []
-        extrinsics = []
-        depths = []
-        cameras = self.cfg.IMAGE.NAMES
-
-        lidar_sample = self.nusc.get('sample_data', rec['data']['LIDAR_TOP'])
-        lidar_pose = self.nusc.get('ego_pose', lidar_sample['ego_pose_token'])
-        yaw = Quaternion(lidar_pose['rotation']).yaw_pitch_roll[0]
-        lidar_rotation = Quaternion(scalar=np.cos(yaw / 2), vector=[0, 0, np.sin(yaw / 2)])
-        lidar_translation = np.array(lidar_pose['translation'])[:, None]
-        lidar_to_world = np.vstack([
-            np.hstack((lidar_rotation.rotation_matrix, lidar_translation)),
-            np.array([0, 0, 0, 1])
-        ])
-
-        for cam in cameras:
-            camera_sample = self.nusc.get('sample_data', rec['data'][cam])
-
-            # Transformation from world to egopose
-            car_egopose = self.nusc.get('ego_pose', camera_sample['ego_pose_token'])
-            egopose_rotation = Quaternion(car_egopose['rotation']).inverse
-            egopose_translation = -np.array(car_egopose['translation'])[:, None]
-            world_to_car_egopose = np.vstack([
-                np.hstack((egopose_rotation.rotation_matrix, egopose_rotation.rotation_matrix @ egopose_translation)),
-                np.array([0, 0, 0, 1])
-            ])
-
-            # From egopose to sensor
-            sensor_sample = self.nusc.get('calibrated_sensor', camera_sample['calibrated_sensor_token'])
-            intrinsic = torch.Tensor(sensor_sample['camera_intrinsic'])
-            sensor_rotation = Quaternion(sensor_sample['rotation'])
-            sensor_translation = np.array(sensor_sample['translation'])[:, None]
-            car_egopose_to_sensor = np.vstack([
-                np.hstack((sensor_rotation.rotation_matrix, sensor_translation)),
-                np.array([0, 0, 0, 1])
-            ])
-            car_egopose_to_sensor = np.linalg.inv(car_egopose_to_sensor)
-
-            # Combine all the transformation.
-            # From sensor to lidar.
-            lidar_to_sensor = car_egopose_to_sensor @ world_to_car_egopose @ lidar_to_world
-            sensor_to_lidar = torch.from_numpy(np.linalg.inv(lidar_to_sensor)).float()
-
-            # Load image
-            image_filename = os.path.join(self.dataroot, camera_sample['filename'])
-            img = Image.open(image_filename)
-            # Resize and crop
-            img = resize_and_crop_image(
-                img, resize_dims=self.augmentation_parameters['resize_dims'], crop=self.augmentation_parameters['crop']
-            )
-            # Normalise image
-            normalised_img = self.normalise_image(img)
-
-            # Combine resize/cropping in the intrinsics
-            top_crop = self.augmentation_parameters['crop'][1]
-            left_crop = self.augmentation_parameters['crop'][0]
-            intrinsic = update_intrinsics(
-                intrinsic, top_crop, left_crop,
-                scale_width=self.augmentation_parameters['scale_width'],
-                scale_height=self.augmentation_parameters['scale_height']
-            )
-
-            images.append(normalised_img.unsqueeze(0).unsqueeze(0))
-            intrinsics.append(intrinsic.unsqueeze(0).unsqueeze(0))
-            extrinsics.append(sensor_to_lidar.unsqueeze(0).unsqueeze(0))
-
-        images, intrinsics, extrinsics = (torch.cat(images, dim=1),
-                                          torch.cat(intrinsics, dim=1),
-                                          torch.cat(extrinsics, dim=1)
-                                          )
-        # if len(depths) > 0:
-        #     depths = torch.cat(depths, dim=1)
-
-        return images, intrinsics, extrinsics
-    def get_lidar_data(self, sample_rec, nsweeps, min_distance):
-        """
-        Returns at most nsweeps of lidar in the ego frame.
-        Returned tensor is 5(x, y, z, reflectance, dt, ring_index) x N
-        Adapted from https://github.com/nutonomy/nuscenes-devkit/blob/master/python-sdk/nuscenes/utils/data_classes.py#L56
-        """
-        # points = np.zeros((5, 0))
-        points = np.zeros((5, 0))
-        V = 35000 * nsweeps
-        # Get reference pose and timestamp.
-        ref_sd_token = sample_rec['data']['LIDAR_TOP']
-        ref_sd_rec = self.nusc.get('sample_data', ref_sd_token)
-        ref_pose_rec = self.nusc.get('ego_pose', ref_sd_rec['ego_pose_token'])
-        ref_cs_rec = self.nusc.get('calibrated_sensor', ref_sd_rec['calibrated_sensor_token'])
-        ref_time = 1e-6 * ref_sd_rec['timestamp']
-
-        # Homogeneous transformation matrix from global to _current_ ego car frame.
-        car_from_global = transform_matrix(ref_pose_rec['translation'], Quaternion(ref_pose_rec['rotation']),
-                                            inverse=True)
-
-        # Aggregate current and previous sweeps.
-        sample_data_token = sample_rec['data']['LIDAR_TOP']
-        current_sd_rec = self.nusc.get('sample_data', sample_data_token)
-        for _ in range(nsweeps):
-            # Load up the pointcloud and remove points close to the sensor.
-            current_pc = LidarPointCloud.from_file(os.path.join(self.nusc.dataroot, current_sd_rec['filename']))
-            current_pc.remove_close(min_distance)
-
-            # Get past pose.
-            current_pose_rec = self.nusc.get('ego_pose', current_sd_rec['ego_pose_token'])
-            global_from_car = transform_matrix(current_pose_rec['translation'],
-                                                Quaternion(current_pose_rec['rotation']), inverse=False)
-
-            # Homogeneous transformation matrix from sensor coordinate frame to ego car frame.
-            current_cs_rec = self.nusc.get('calibrated_sensor', current_sd_rec['calibrated_sensor_token'])
-            car_from_current = transform_matrix(current_cs_rec['translation'], Quaternion(current_cs_rec['rotation']),
-                                                inverse=False)
-
-            # Fuse four transformation matrices into one and perform transform.
-            trans_matrix = reduce(np.dot, [car_from_global, global_from_car, car_from_current])
-            current_pc.transform(trans_matrix)
-
-            # Add time vector which can be used as a temporal feature.
-            time_lag = ref_time - 1e-6 * current_sd_rec['timestamp']
-            times = time_lag * np.ones((1, current_pc.nbr_points()))
-
-            new_points = np.concatenate((current_pc.points, times), 0)
-            points = np.concatenate((points, new_points), 1)
-
-            if current_sd_rec['prev'] == '':
-                break
-            else:
-                current_sd_rec = self.nusc.get('sample_data', current_sd_rec['prev'])
-                
-                
-                
-        if points.shape[1] > V:
-                # # print('lidar_data.shape[0]', lidar_data.shape[0])
-                # np.random.shuffle(lidar_data)
-            points = points[:,:V]
-        elif points.shape[0] < V:
-            points = np.pad(points,[(0,0),(0, V-points.shape[1])],mode='constant')  
-            # Abort if there are no previous sweeps.
-
-        return points
-    
-    
     def _get_top_lidar_pose(self, rec):
         egopose = self.nusc.get('ego_pose', self.nusc.get('sample_data', rec['data']['LIDAR_TOP'])['ego_pose_token'])
 
@@ -672,105 +460,6 @@ class DatasetEVWaymo(torch.utils.data.Dataset):
         
         return segmentation, instance, instance_map
 
-    def get_label(self, info_dict, instance_map, in_pred):
-        """从DSEC数据格式生成BEV分割标签"""
-        # 从info_dict中提取数据
-        print('-'*100)
-        print(info_dict['annos'][0]['name'])
-        if 'seq_annos' not in info_dict:
-            # 如果没有seq_annos，尝试使用原始的annos
-            if 'annos' not in info_dict or len(info_dict['annos']) == 0:
-                # 如果没有标注，返回空标签
-                segmentation = np.zeros((self.bev_dimension[0], self.bev_dimension[1]))
-                instance = np.zeros((self.bev_dimension[0], self.bev_dimension[1]))
-                segmentation = torch.from_numpy(segmentation).long().unsqueeze(0).unsqueeze(0)
-                instance = torch.from_numpy(instance).long().unsqueeze(0)
-                return segmentation, instance, instance_map
-            # 使用原始annos的第一帧（当前帧）
-            annos_list = info_dict['annos']
-            if isinstance(annos_list, (list, np.ndarray)) and len(annos_list) > 0:
-                annos = annos_list[0]
-            else:
-                annos = annos_list
-        else:
-            # 使用seq_annos（在init_infos中已转换）
-            seq_annos = info_dict['seq_annos']
-            if isinstance(seq_annos, np.ndarray):
-                # numpy array，每个元素是一帧的标注
-                if len(seq_annos) > 0:
-                    annos = seq_annos[0]  # 使用第一帧的标注（当前帧）
-                else:
-                    # 空标注
-                    segmentation = np.zeros((self.bev_dimension[0], self.bev_dimension[1]))
-                    instance = np.zeros((self.bev_dimension[0], self.bev_dimension[1]))
-                    segmentation = torch.from_numpy(segmentation).long().unsqueeze(0).unsqueeze(0)
-                    instance = torch.from_numpy(instance).long().unsqueeze(0)
-                    return segmentation, instance, instance_map
-            elif isinstance(seq_annos, list) and len(seq_annos) > 0:
-                annos = seq_annos[0]
-            else:
-                # 空标注
-                segmentation = np.zeros((self.bev_dimension[0], self.bev_dimension[1]))
-                instance = np.zeros((self.bev_dimension[0], self.bev_dimension[1]))
-                segmentation = torch.from_numpy(segmentation).long().unsqueeze(0).unsqueeze(0)
-                instance = torch.from_numpy(instance).long().unsqueeze(0)
-                return segmentation, instance, instance_map
-        
-        # 提取标注数据
-        if not isinstance(annos, dict) or 'gt_boxes_lidar' not in annos:
-            # 无效的标注格式
-            segmentation = np.zeros((self.bev_dimension[0], self.bev_dimension[1]))
-            instance = np.zeros((self.bev_dimension[0], self.bev_dimension[1]))
-            segmentation = torch.from_numpy(segmentation).long().unsqueeze(0).unsqueeze(0)
-            instance = torch.from_numpy(instance).long().unsqueeze(0)
-            return segmentation, instance, instance_map
-        
-        gt_boxes_lidar = annos['gt_boxes_lidar']
-        gt_names = annos['name']
-        gt_obj_ids = annos['obj_ids']
-        pose_matrix = info_dict.get('pose', np.eye(4))
-        
-        # 生成BEV标签
-        segmentation_np, instance_np, instance_map = self.get_label_from_boxes(
-            gt_boxes_lidar, gt_names, gt_obj_ids, pose_matrix, instance_map
-        )
-        
-        # 转换为torch tensor
-        segmentation = torch.from_numpy(segmentation_np).long().unsqueeze(0).unsqueeze(0)
-        instance = torch.from_numpy(instance_np).long().unsqueeze(0)
-        
-        return segmentation, instance, instance_map
-
-
-    def get_future_egomotion(self, rec, index):
-        rec_t0 = rec
-
-        # Identity
-        future_egomotion = np.eye(4, dtype=np.float32)
-
-        if index < len(self.ixes) - 1:
-            rec_t1 = self.ixes[index + 1]
-
-            if rec_t0['scene_token'] == rec_t1['scene_token']:
-                egopose_t0 = self.nusc.get(
-                    'ego_pose', self.nusc.get('sample_data', rec_t0['data']['LIDAR_TOP'])['ego_pose_token']
-                )
-                egopose_t1 = self.nusc.get(
-                    'ego_pose', self.nusc.get('sample_data', rec_t1['data']['LIDAR_TOP'])['ego_pose_token']
-                )
-
-                egopose_t0 = convert_egopose_to_matrix_numpy(egopose_t0)
-                egopose_t1 = convert_egopose_to_matrix_numpy(egopose_t1)
-
-                future_egomotion = invert_matrix_egopose_numpy(egopose_t1).dot(egopose_t0)
-                future_egomotion[3, :3] = 0.0
-                future_egomotion[3, 3] = 1.0
-
-        future_egomotion = torch.Tensor(future_egomotion).float()
-
-        # Convert to 6DoF vector
-        future_egomotion = mat2pose_vec(future_egomotion)
-        return future_egomotion.unsqueeze(0)
 
     def __len__(self):
         return len(self.dataloader_index)
@@ -1012,8 +701,8 @@ class DatasetEVWaymo(torch.utils.data.Dataset):
 
         for j in range(1):
             cam_name = 'camera_%s' % str(j)
-            # new_ex_param = np.linalg.inv(img_infos['image_%d_extrinsic' % j])
-            new_ex_param = self.inverse_T(img_infos['image_%d_extrinsic' % j])
+            new_ex_param = np.linalg.inv(img_infos['image_%d_extrinsic' % j])
+            # new_ex_param = img_infos['image_%d_extrinsic' % j]
             new_ex_param = torch.from_numpy(new_ex_param).unsqueeze(0).unsqueeze(0)
             new_in_param = img_infos['image_%d_intrinsic' % j].unsqueeze(0).unsqueeze(0)
             imgs_dict['extrinsic'] = new_ex_param
@@ -1137,7 +826,6 @@ class DatasetEVWaymo(torch.utils.data.Dataset):
         data_split_interval = self.num_speed//(1000//self.event_speed)
         if data_split_interval <= 0:
             return data_dict
-        
         # target_idx_list is a list, use the first element as the base index
         base_idx = target_idx_list[0] if isinstance(target_idx_list, (list, np.ndarray)) else target_idx_list
         # base timestamp (microseconds) for this flow window - used to normalize lidar timestamps to seconds
@@ -1169,6 +857,7 @@ class DatasetEVWaymo(torch.utils.data.Dataset):
             'flow_lidar': [],
             'events_stmp': [],
             'lidar_stmp': [],
+            'pts_depth': [],
         }
         
         def get_data(idx):
@@ -1239,6 +928,8 @@ class DatasetEVWaymo(torch.utils.data.Dataset):
     
 
     def __getitem__(self, index):
+        # print(self.temp_counter, index)
+
         self.temp_counter += 1
         index_str = self.dataloader_index[index].split("_")
         index, index_flow = int(index_str[0]), int(index_str[1])
@@ -1398,6 +1089,9 @@ class DatasetEVWaymo(torch.utils.data.Dataset):
                     if 'events_grid' in input_dict and 'evs_stmp' in input_dict:
                         if len(input_dict['events_grid']) > 0 and len(input_dict['evs_stmp']) > 0:
                             input_dict = self.get_data_flow(input_dict, target_idx_list, index_flow)
+            img = cv2.imread(current_info['depth_image_path'], 0)
+            img = torch.from_numpy(img).float()
+            input_dict['flow_data'][0]['depth_image'] = img
 
         if 'seq_annos' in current_info:
 
@@ -1406,9 +1100,9 @@ class DatasetEVWaymo(torch.utils.data.Dataset):
             gt_len_index = 0
             anno_names = []
             gt_obj_ids = []
-            seq_annos_flow = current_info['seq_annos']
+            seq_annos_flow = copy.deepcopy(current_info['seq_annos'])
+            # seq_annos_flow = current_info['seq_annos']
             # interval = self.event_speed//self.num_speed
-            
             seq_annos_flow = [seq_annos_flow[index_flow]]
             # if True:seq_annos_flow = [seq_annos_flow[0]]？
             for i in range(len(seq_annos_flow)):
@@ -1459,9 +1153,71 @@ class DatasetEVWaymo(torch.utils.data.Dataset):
             }
             data_dict['metas'] = [meta]  # list of dict，每个样本一个meta
         # print('gt_names',data_dict['gt_names'])
-        print(self.temp_counter, index, len(data_dict['gt_names']))
 
         return data_dict
+
+# def project_lidar_to_raster_tensor(points: torch.Tensor,
+#                                     intrinsic: torch.Tensor,
+#                                     extrinsic: torch.Tensor,
+#                                     img_size=(480, 640)) :
+#     """
+#     将激光雷达点云投影并转换为栅格图像（完全 Tensor 版本，无类型转换）
+    
+#     Args:
+#         points: 点云坐标 (N, 3)，在 GPU 上，dtype=torch.float32
+#         intrinsic: 相机内参 (1, 1, 3, 3)，dtype=torch.float32
+#         extrinsic: 相机外参 (1, 1, 4, 4)，dtype=torch.float32
+#         img_size: 图像尺寸 (height, width)
+        
+#     Returns:
+#         sparse_depth: 稀疏深度图 (H, W)，dtype=torch.float32
+#     """
+#     device = points.device
+#     axes_tf = torch.tensor([
+#             [0, -1, 0, 0],
+#             [0, 0, -1, 0],
+#             [1, 0, 0, 0],
+#             [0, 0, 0, 1]]).to(torch.float32)
+#     # 1. 处理内参和外参（移除 batch 维度，保持 float32）
+#     intrinsic = intrinsic[0, 0].to(torch.float32)*4  # (3, 3)
+#     intrinsic[-1,-1] = intrinsic[-1,-1]/4
+#     print(intrinsic)
+#     extrinsic = extrinsic[0, 0].to(torch.float32)  # (4, 4)
+#     # extrinsic = extrinsic
+#     extrinsic = torch.matmul(axes_tf, extrinsic)
+#     # 2. 构建投影矩阵
+#     zeros = torch.zeros(3, 1, device=device, dtype=torch.float32)
+#     intrinsic_34 = torch.cat([intrinsic, zeros], dim=1)  # (3, 4)
+#     proj_mat = intrinsic_34 @ extrinsic  # (3, 4)
+#     print('proj_mat', proj_mat)
+#     # 3. 投影点云
+#     N = points.shape[0]
+#     h, w = img_size
+    
+#     ones = torch.ones(N, 1, device=device, dtype=torch.float32)
+#     print('points',points.shape)
+#     pts_homo = torch.cat([points[:,:3], ones], dim=1)  # (N, 4)
+#     pts_img = proj_mat @ pts_homo.T  # (3, N)
+    
+#     depths = pts_img[2, :]  # (N,)
+#     uv = (pts_img[:2, :] / depths.unsqueeze(0)).T  # (N, 2)
+    
+#     # 4. 筛选有效点
+#     valid_mask = (depths > 0) & \
+#                  (uv[:, 0] >= 0) & (uv[:, 0] < w) & \
+#                  (uv[:, 1] >= 0) & (uv[:, 1] < h)
+    
+#     uv_valid = uv[valid_mask].long()
+    
+#     # 5. 栅格化
+#     sparse_depth = torch.zeros(h, w, device=device, dtype=torch.float32)
+    
+#     if uv_valid.shape[0] > 0:
+#         rows = uv_valid[:, 1]
+#         cols = uv_valid[:, 0]
+#         sparse_depth[rows, cols] = 255.0
+#     tensor_to_image(sparse_depth)
+#     return sparse_depth
 
 
 def list_oss_dir(oss_path, client, with_info=False):
@@ -1500,6 +1256,82 @@ def oss_exist(data_path, file_path, oss_data_list, refresh=False):
         return True
     else:
         return False
+
+import numpy as np
+import matplotlib.pyplot as plt
+from typing import Optional, Union
+
+def tensor_to_image(tensor: torch.Tensor, 
+                    denormalize: bool = True,
+                    mean: list = [0.485, 0.456, 0.406],
+                    std: list = [0.229, 0.224, 0.225],
+                    save_path: Optional[str] = None,
+                    figsize: tuple = (10, 10)) -> np.ndarray:
+    """
+    将CUDA tensor转换为可显示的图像
+    
+    Args:
+        tensor: CUDA tensor，形状可以是 (C, H, W) 或 (B, C, H, W) 或 (H, W, C)
+        denormalize: 是否进行反归一化
+        mean: 归一化时的均值
+        std: 归一化时的标准差
+        save_path: 保存路径，如果提供则保存图像
+        figsize: matplotlib图形大小
+    
+    Returns:
+        numpy数组，形状为 (H, W, 3)，值范围 0-255
+    """
+    # 1. 将tensor移到CPU并转换为numpy
+    if tensor.is_cuda:
+        tensor = tensor.cpu()
+    
+    # 2. 处理不同形状
+    if tensor.dim() == 4:  # (B, C, H, W)
+        tensor = tensor[0]  # 取第一个batch
+    elif tensor.dim() == 2:  # (H, W) 灰度图
+        pass
+    elif tensor.dim() == 3 and tensor.shape[0] in [1, 3]:  # (C, H, W)
+        pass
+    elif tensor.dim() == 3 and tensor.shape[-1] in [1, 3]:  # (H, W, C)
+        tensor = tensor.permute(2, 0, 1)  # 转换为 (C, H, W)
+    
+    # 3. 转换为numpy数组
+    img = tensor.detach().numpy()
+    
+    # 4. 处理灰度图
+    if img.shape[0] == 1:
+        img = img.squeeze(0)
+    
+    # 5. 反归一化（如果需要）
+    if denormalize and img.shape[0] == 3:
+        mean_tensor = np.array(mean).reshape(3, 1, 1)
+        std_tensor = np.array(std).reshape(3, 1, 1)
+        img = img * std_tensor + mean_tensor
+    
+    # 6. 转换为图像格式
+    if img.ndim == 3:  # (C, H, W) -> (H, W, C)
+        img = np.transpose(img, (1, 2, 0))
+    
+    # 7. 确保值在有效范围内
+    img = np.clip(img, 0, 1)
+    img = (img * 255).astype(np.uint8)
+    
+    # 8. 显示或保存
+    plt.figure(figsize=figsize)
+    if img.shape[-1] == 1 or len(img.shape) == 2:
+        plt.imshow(img.squeeze(), cmap='gray')
+    else:
+        plt.imshow(img)
+    plt.axis('off')
+    plt.title('Tensor Visualization')
+    
+    if save_path:
+        plt.savefig(save_path, bbox_inches='tight', dpi=150)
+        print(f"图像已保存到: {save_path}")
+    
+    plt.show()
+    
+    return img
 
 if __name__ == '__main__':
     from fvcore.common.config import CfgNode as _CfgNode
@@ -1557,8 +1389,8 @@ if __name__ == '__main__':
     cfg.GEN.GEN_VOXELS = True
 
     cfg.IMAGE = CN()
-    cfg.IMAGE.FINAL_DIM = (960, 640)
-    cfg.IMAGE.RESIZE_SCALE = 1
+    cfg.IMAGE.FINAL_DIM = (320, 480)
+    cfg.IMAGE.RESIZE_SCALE = .25
     cfg.IMAGE.TOP_CROP = 0
     cfg.IMAGE.ORIGINAL_HEIGHT = 1280  # Original input RGB camera height
     cfg.IMAGE.ORIGINAL_WIDTH = 1920  # Original input RGB camera width
@@ -1575,11 +1407,18 @@ if __name__ == '__main__':
     evwaymo = DatasetEVWaymo(data_cfg, cfg, is_train=True)
     print(len(evwaymo))
     dat = evwaymo[0]
+    # print(dat['intrinsic'])
+    # print(dat['extrinsic'])
+
     for n in range(3000):
         start_time = time.time()
         dat = evwaymo[n]
         end_time = time.time()
         print(n, 'time cost', end_time - start_time)
+        # dat = evwaymo[n]
+        # print(n, dat['intrinsic'])
+        # print(n, dat['extrinsic'])
+
         # print('time cost', end_time - start_time)
         # print('gt_names',dat['gt_names'])
         # print(dat['flow_data'][0]['events_stmp'], dat['flow_data'][0]['lidar_stmp'])

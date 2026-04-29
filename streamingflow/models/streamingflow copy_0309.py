@@ -279,7 +279,7 @@ class streamingflow(nn.Module):
             projection_key = f'lidar_states_std_projection_{128}_to_{64}'
             self.standard_projections = nn.ModuleDict()
                     # if projection_key not in self.standard_projections:
-            self.standard_projections[projection_key] = nn.Conv2d(128, 128, 1)
+            self.standard_projections[projection_key] = nn.Conv2d(128, 64, 1)
             # self.temporal_model_lidar = TemporalModel(
             #     actual_lidar_output_channels,
             #     self.receptive_field,
@@ -557,112 +557,112 @@ class streamingflow(nn.Module):
                     x = feature.unsqueeze(1)  # [B, 1, C, H, W]
 
                 lidar_states = self.temporal_model_lidar(x)
-        if True:
-            if not self.use_camera and not self.use_event:
-                raise ValueError("At least one of USE_CAMERA or USE_EVENT must be True.")
 
-            intrinsics_rf = intrinsics[:, :self.receptive_field].contiguous()
-            extrinsics_rf = extrinsics[:, :self.receptive_field].contiguous()
+        if not self.use_camera and not self.use_event:
+            raise ValueError("At least one of USE_CAMERA or USE_EVENT must be True.")
 
-            image_rf = None
-            if self.use_camera:
-                if image is None:
-                    raise ValueError("USE_CAMERA is True but no image input was provided to forward().")
-                image_rf = image[:, :self.receptive_field].contiguous()
+        intrinsics_rf = intrinsics[:, :self.receptive_field].contiguous()
+        extrinsics_rf = extrinsics[:, :self.receptive_field].contiguous()
 
-            event_in = None
-            if self.use_event:
-                if event is None:
-                    raise ValueError("USE_EVENT is True but no event input was provided to forward().")
-                if torch.is_tensor(event):
-                    event_in = event[:, :self.receptive_field].contiguous()
-                elif isinstance(event, dict) and "frames" in event and torch.is_tensor(event["frames"]):
-                    event_in = dict(event)
-                    event_in["frames"] = event["frames"][:, :self.receptive_field].contiguous()
-                else:
-                    event_in = event
+        image_rf = None
+        if self.use_camera:
+            if image is None:
+                raise ValueError("USE_CAMERA is True but no image input was provided to forward().")
+            image_rf = image[:, :self.receptive_field].contiguous()
 
-            # Ensure future_egomotion has same temporal length as intrinsics (s)
-            # so downstream projection_to_birds_eye_view indexing won't go out of bounds.
-            # If future_egomotion has fewer timesteps, repeat the last one; if more, truncate.
+        event_in = None
+        if self.use_event:
+            if event is None:
+                raise ValueError("USE_EVENT is True but no event input was provided to forward().")
+            if torch.is_tensor(event):
+                event_in = event[:, :self.receptive_field].contiguous()
+            elif isinstance(event, dict) and "frames" in event and torch.is_tensor(event["frames"]):
+                event_in = dict(event)
+                event_in["frames"] = event["frames"][:, :self.receptive_field].contiguous()
+            else:
+                event_in = event
+
+        # Ensure future_egomotion has same temporal length as intrinsics (s)
+        # so downstream projection_to_birds_eye_view indexing won't go out of bounds.
+        # If future_egomotion has fewer timesteps, repeat the last one; if more, truncate.
+        try:
+            s = intrinsics_rf.shape[1]
+            if future_egomotion is None:
+                future_egomotion = torch.zeros((intrinsics_rf.shape[0], s, 6), device=intrinsics_rf.device, dtype=torch.float32)
+            else:
+                if isinstance(future_egomotion, np.ndarray):
+                    future_egomotion = torch.from_numpy(future_egomotion)
+                if future_egomotion.dim() == 2:
+                    future_egomotion = future_egomotion.unsqueeze(1)
+                future_egomotion = future_egomotion.to(device=intrinsics_rf.device, dtype=torch.float32)
+                cur_s = future_egomotion.shape[1]
+                if cur_s < s:
+                    last = future_egomotion[:, -1:, :].expand(future_egomotion.shape[0], s - cur_s, 6)
+                    future_egomotion = torch.cat([future_egomotion, last], dim=1)
+                elif cur_s > s:
+                    future_egomotion = future_egomotion[:, :s, :].contiguous()
+        except Exception:
+            # Fallback: ensure shape is at least (B, s, 6)
             try:
-                s = intrinsics_rf.shape[1]
-                if future_egomotion is None:
-                    future_egomotion = torch.zeros((intrinsics_rf.shape[0], s, 6), device=intrinsics_rf.device, dtype=torch.float32)
-                else:
-                    if isinstance(future_egomotion, np.ndarray):
-                        future_egomotion = torch.from_numpy(future_egomotion)
-                    if future_egomotion.dim() == 2:
-                        future_egomotion = future_egomotion.unsqueeze(1)
-                    future_egomotion = future_egomotion.to(device=intrinsics_rf.device, dtype=torch.float32)
-                    cur_s = future_egomotion.shape[1]
-                    if cur_s < s:
-                        last = future_egomotion[:, -1:, :].expand(future_egomotion.shape[0], s - cur_s, 6)
-                        future_egomotion = torch.cat([future_egomotion, last], dim=1)
-                    elif cur_s > s:
-                        future_egomotion = future_egomotion[:, :s, :].contiguous()
+                future_egomotion = future_egomotion.to(device=intrinsics_rf.device, dtype=torch.float32)
             except Exception:
-                # Fallback: ensure shape is at least (B, s, 6)
-                try:
-                    future_egomotion = future_egomotion.to(device=intrinsics_rf.device, dtype=torch.float32)
-                except Exception:
-                    future_egomotion = torch.zeros((intrinsics_rf.shape[0], intrinsics_rf.shape[1], 6), device=intrinsics_rf.device, dtype=torch.float32)
+                future_egomotion = torch.zeros((intrinsics_rf.shape[0], intrinsics_rf.shape[1], 6), device=intrinsics_rf.device, dtype=torch.float32)
 
-            modality_outputs = self.calculate_birds_eye_view_features(
-                intrinsics_rf,
-                extrinsics_rf,
-                future_egomotion,
-                image=image_rf,
-                event=event_in,
-            )
+        modality_outputs = self.calculate_birds_eye_view_features(
+            intrinsics_rf,
+            extrinsics_rf,
+            future_egomotion,
+            image=image_rf,
+            event=event_in,
+        )
 
-            camera_data = modality_outputs.get("camera")
-            event_data = modality_outputs.get("event")
+        camera_data = modality_outputs.get("camera")
+        event_data = modality_outputs.get("event")
 
-            bev_sequence = None
-            if camera_data is not None:
-                bev_sequence = camera_data["bev"]
-                output["depth_prediction"] = camera_data["depth"]
-                if camera_data["cam_front"] is not None:
-                    output["cam_front"] = camera_data["cam_front"]
+        bev_sequence = None
+        if camera_data is not None:
+            bev_sequence = camera_data["bev"]
+            output["depth_prediction"] = camera_data["depth"]
+            if camera_data["cam_front"] is not None:
+                output["cam_front"] = camera_data["cam_front"]
 
-            if event_data is not None:
-                output["event_depth_prediction"] = event_data["depth"]
-                if "depth_prediction" not in output:
-                    output["depth_prediction"] = event_data["depth"]
-                if bev_sequence is None:
-                    bev_sequence = event_data["bev"]
-                else:
-                    if self.event_bev_fusion == "sum":
-                        bev_sequence = bev_sequence + event_data["bev"]
-                    elif self.event_bev_fusion == "avg":
-                        bev_sequence = 0.5 * (bev_sequence + event_data["bev"])
-                    else:
-                        raise ValueError(f"Unsupported MODEL.EVENT.BEV_FUSION={self.event_bev_fusion}")
-
-                # Check bev_sequence for NaN/Inf after event fusion
-                if torch.isnan(bev_sequence).any() or torch.isinf(bev_sequence).any():
-                    bev_sequence = torch.where(
-                        torch.isnan(bev_sequence) | torch.isinf(bev_sequence),
-                        torch.zeros_like(bev_sequence),
-                        bev_sequence
-                    )
-
+        if event_data is not None:
+            output["event_depth_prediction"] = event_data["depth"]
+            if "depth_prediction" not in output:
+                output["depth_prediction"] = event_data["depth"]
             if bev_sequence is None:
-                raise RuntimeError("Failed to compute BEV features from available modalities.")
+                bev_sequence = event_data["bev"]
+            else:
+                if self.event_bev_fusion == "sum":
+                    bev_sequence = bev_sequence + event_data["bev"]
+                elif self.event_bev_fusion == "avg":
+                    bev_sequence = 0.5 * (bev_sequence + event_data["bev"])
+                else:
+                    raise ValueError(f"Unsupported MODEL.EVENT.BEV_FUSION={self.event_bev_fusion}")
 
-            if self.cfg.MODEL.TEMPORAL_MODEL.INPUT_EGOPOSE:
-                b, s, c = future_egomotion.shape
-                h, w = bev_sequence.shape[-2:]
-                future_egomotions_spatial = future_egomotion.view(b, s, c, 1, 1).expand(b, s, c, h, w)
-                future_egomotions_spatial = torch.cat(
-                    [torch.zeros_like(future_egomotions_spatial[:, :1]),
-                    future_egomotions_spatial[:, :(self.receptive_field - 1)]],
-                    dim=1,
+            # Check bev_sequence for NaN/Inf after event fusion
+            if torch.isnan(bev_sequence).any() or torch.isinf(bev_sequence).any():
+                bev_sequence = torch.where(
+                    torch.isnan(bev_sequence) | torch.isinf(bev_sequence),
+                    torch.zeros_like(bev_sequence),
+                    bev_sequence
                 )
-                bev_sequence = torch.cat([bev_sequence, future_egomotions_spatial], dim=-3)
 
-            camera_states = self.temporal_model(bev_sequence)
+        if bev_sequence is None:
+            raise RuntimeError("Failed to compute BEV features from available modalities.")
+
+        if self.cfg.MODEL.TEMPORAL_MODEL.INPUT_EGOPOSE:
+            b, s, c = future_egomotion.shape
+            h, w = bev_sequence.shape[-2:]
+            future_egomotions_spatial = future_egomotion.view(b, s, c, 1, 1).expand(b, s, c, h, w)
+            future_egomotions_spatial = torch.cat(
+                [torch.zeros_like(future_egomotions_spatial[:, :1]),
+                 future_egomotions_spatial[:, :(self.receptive_field - 1)]],
+                dim=1,
+            )
+            bev_sequence = torch.cat([bev_sequence, future_egomotions_spatial], dim=-3)
+
+        camera_states = self.temporal_model(bev_sequence)
         # standard_spatial_size = self.bev_size  # (200, 200) - BEV 网格尺寸
         standard_channels = self.future_pred_in_channels  # 64
         
@@ -701,7 +701,7 @@ class streamingflow(nn.Module):
                         # self.standard_projections = nn.ModuleDict()
                     # if projection_key not in self.standard_projections:
                         # self.standard_projections[projection_key] = nn.Conv2d(C, standard_channels, 1).to(lidar_states.device)
-                    # lidar_state = self.standard_projections[projection_key](lidar_state)
+                    lidar_state = self.standard_projections[projection_key](lidar_state)
                 new_lidar_states.append(lidar_state)
             lidar_states = new_lidar_states
             # 空间对齐
@@ -716,7 +716,7 @@ class streamingflow(nn.Module):
         if camera_states is not None:
             states = camera_states
         elif lidar_states is not None:
-            states = torch.stack(lidar_states).squeeze(1)
+            states = lidar_states
         else:
             raise RuntimeError("Both camera_states and lidar_states are None. At least one modality must be available.")
 
@@ -745,14 +745,12 @@ class streamingflow(nn.Module):
         if self.n_future > 0:
             # past_states = states
             
-            # present_state = states.sum(dim=1, keepdim=True).contiguous()
+            present_state = states.sum(dim=1, keepdim=True).contiguous()
             # present_state = states[:, -1:].contiguous()
-            future_prediction_input = torch.stack(lidar_states) 
-            camera_states_for_ode = None
-            # camera_states_for_ode = camera_states
+            future_prediction_input = present_state 
+            camera_states_for_ode = camera_states
             lidar_states_for_ode = lidar_states
-            camera_timestamp_ode = None
-            # camera_timestamp_ode = camera_timestamp
+            camera_timestamp_ode = camera_timestamp
             # camera_timestamp_ode = camera_timestamp[:, :self.receptive_field] if camera_timestamp is not None else None
             lidar_timestamp_ode = lidar_timestamp
             # lidar_timestamp_ode = lidar_timestamp[:, :self.receptive_field] if lidar_timestamp is not None else None
@@ -817,10 +815,9 @@ class streamingflow(nn.Module):
             bev_output = self.decoder(states, metas)
 
         output = {**output, **bev_output}
-        # output["event_bev"] = event_data["bev"] if event_data is not None else None
+        output["event_bev"] = event_data["bev"] if event_data is not None else None
         output["lidar_states"] = lidar_states
         output["camera_states"] = camera_states
-        
 
         return output
 

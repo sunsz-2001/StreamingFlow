@@ -1,13 +1,14 @@
-TAG: 'evwaymo_event_lidar_eval_4'  # 训练日志和检查点保存目录名（与 event-only 区分）
+# TAG: 'test'  # 训练日志和检查点保存目录名（与 event-only 区分）
+TAG: 'evwaymo_event_wolidar_wonode_901'  # 训练日志和检查点保存目录名（与 event-only 区分）
 
-GPUS: [1]
-# GPUS: [0,1,2,3]
-BATCHSIZE: 2
+# GPUS: [1]
+GPUS: [0,1,2,3]
+BATCHSIZE: 4
 PRECISION: 32  # 16 或 32，混合精度训练使用 16
-EPOCHS: 50  # 训练轮数
+EPOCHS: 20  # 训练轮数
 
-N_WORKERS: 1  # 数据加载器工作进程数
-# LOG_DIR: 'logs'  # 日志保存目录（默认：'logs'）
+N_WORKERS: 4  # 数据加载器工作进程
+LOG_DIR: '/home/user/sunsz/StreamingFlow/logs'  # 日志保存目录（默认：'logs'）
 # GRAD_NORM_CLIP: 5  # 梯度裁剪阈值（默认：5）
 # LOGGING_INTERVAL: 500  # 日志记录间隔（默认：500）
 # VIS_INTERVAL: 5000  # 可视化间隔（默认：5000）
@@ -56,8 +57,8 @@ N_FUTURE_FRAMES: 1  # 未来预测帧数
 # 建议值：4-6（根据任务需求调整，值越大计算量越大）
 
 IMAGE:
-  FINAL_DIM: (480, 320)
-  RESIZE_SCALE: 0.25
+  FINAL_DIM: (320, 480)
+  RESIZE_SCALE: .25
   TOP_CROP: 0
   ORIGINAL_HEIGHT: 1280
   ORIGINAL_WIDTH: 1920
@@ -68,7 +69,7 @@ LIFT:
   GEN_DEPTH: False
   X_BOUND: [0, 51.2,0.8]  # Forward direction [min, max, resolution]
   Y_BOUND: [-32, 32, 0.8]  # Side direction [min, max, resolution]
-  Z_BOUND: [-10.0, 10.0, 20.0]  # Height [min, max, resolution]
+  Z_BOUND: [-20.0, 20.0, 40.0]  # Height [min, max, resolution]
   D_BOUND: [2.0, 50.0, 1.0]  # Depth [min, max, resolution]
 
 MODEL:
@@ -95,10 +96,10 @@ MODEL:
     FUSION_TYPE: 'independent'
     BEV_FUSION: 'sum'
     USE_DEPTH_HEAD: True
-    DEPTH_BINS: 80
+    DEPTH_BINS: 48
     DEPTH_HEAD_CHANNELS: 128
     RESIDUAL_INIT: 0.0
-    INPUT_SIZE: [480, 320]  # Event 输入分辨率 [H, W]
+    INPUT_SIZE: [320, 480]  # Event 输入分辨率 [H, W]
     DOWNSAMPLE: 8  # Event encoder 下采样率（EventEncoderEvRT 固定为 8）
   TEMPORAL_MODEL:
     NAME: 'identity'

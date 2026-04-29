@@ -176,11 +176,13 @@ class DatasetDSEC(torch.utils.data.Dataset):
 
             if self.mode == 'train':
                 new_infos = []
-                infos = infos[:-1]
+                # infos = infos[:-1]
                 
                 for i in range(len(infos)):
+                    if len(infos[i]['annos']) <10 or infos[i]['annos'][0]['name'].shape[0] == 0:
+                        continue
                     new_info = copy.deepcopy(infos[i])
-                    if new_info['sample_idx']!=30:    
+                    if new_info['sample_idx']<30 and counter<3397:    
                         for n in range(self.num_speed//10):
                             # if n>0: continue
                             flow_idx = new_info['flow_list'][n]
@@ -215,11 +217,12 @@ class DatasetDSEC(torch.utils.data.Dataset):
                 infos = new_infos
             else:
                 new_infos = []
-                infos = infos[:-1]
+                # infos = infos[:-1]
 
                 for i in range(len(infos)):
                     new_info = copy.deepcopy(infos[i])
-                    if new_info['sample_idx']!=30:
+                    if new_info['sample_idx']<30 and counter<3397:    
+                    # if new_info['sample_idx']!=30:
                         for n in range(self.num_speed//10):
                             # if n>0: continue
                             flow_idx = new_info['flow_list'][n]
@@ -571,6 +574,7 @@ class DatasetDSEC(torch.utils.data.Dataset):
         infos, points = [], []
         for i in idx_list:
             lidar_path = self.infos[i]["lidar_path"]
+            # print(lidar_path)
             #################### For disparity input #################
             lidar_path = os.path.join(self.dataroot, self.infos[i]['lidar_path'])
             disparity_path = os.path.join(self.dataroot, self.infos[i]['disparity_path'])
@@ -1290,11 +1294,11 @@ class DatasetDSEC(torch.utils.data.Dataset):
                         flow_dict['lidar_stmp'].append((self.infos[base_idx]['time_stamp'] - base_us) / 1e6)
                 # 如果事件数量足够多（>=10），在第10个事件时添加下一个时间步的点云
                 # 否则在最后一个事件时添加
-                elif event_idx == min(10, actual_event_num - 1) and actual_event_num > 1 and self.use_lidar:
+                elif event_idx == actual_event_num - 1 and actual_event_num > 1 and self.use_lidar:
                     # 确保 base_idx+1 有效
                     if base_idx + 1 < len(self.infos):
                         _, points = self.get_infos_and_points([base_idx+1])
-                        flow_dict['flow_lidar'].append(points[0])
+                        flow_dict['flow_lidar'].append(points)
                         # normalize next-frame lidar timestamp to seconds relative to base_us
                         flow_dict['lidar_stmp'].append((self.infos[base_idx+1]['time_stamp'] - base_us) / 1e6)
                 
@@ -1346,7 +1350,14 @@ class DatasetDSEC(torch.utils.data.Dataset):
     
 
     def __getitem__(self, index):
+
+        # if directly_idx is not None:
+        #     index_str = directly_idx.split("_")
+        # else:
+        #     print(self.dataloader_index[index])
+        #     index_str = self.dataloader_index[index].split("_")
         index_str = self.dataloader_index[index].split("_")
+        
         index, index_flow = int(index_str[0]), int(index_str[1])
         target_idx_list = [index]
         current_info = copy.deepcopy(self.infos[index])
@@ -1502,6 +1513,10 @@ class DatasetDSEC(torch.utils.data.Dataset):
                     if 'events_grid' in input_dict and 'evs_stmp' in input_dict:
                         if len(input_dict['events_grid']) > 0 and len(input_dict['evs_stmp']) > 0:
                             input_dict = self.get_data_flow(input_dict, target_idx_list, index_flow)
+        # print(len(input_dict['flow_data'][0]['flow_lidar']))
+        if len(input_dict['flow_data'][0]['flow_lidar']) == 0:
+            print(index, index_str)
+        
         if 'seq_annos' in current_info:
 
             gt_boxes_lidar = []
@@ -1675,14 +1690,26 @@ if __name__ == '__main__':
     cfg.MODEL.LIDAR.USE_BESTI = False
     dsec = DatasetDSEC(data_cfg, cfg, is_train=True)
     print(len(dsec))
-    dat = dsec[0]
-    for n in range(3000):
-        # start_time = time.time()
-        dat = dsec[n]
-        # end_time = time.time()
-        # print('time cost', end_time - start_time)
-        # print(dat['flow_data'][0]['events_stmp'], dat['flow_data'][0]['lidar_stmp'])
-        # print('gt_names',dat['gt_names'])
-        # if len(dat['gt_names']) > 1:
-        #     print(dat['gt_names'])
+    # dat = dsec[0]
+#     data_list = [
+#     "3306_9", "1527_9", "2563_9", "1156_4", "454_9", 
+#     "2644_9", "2793_9", "1043_9", "823_4", "53_4", 
+#     "495_4", "1621_9", "483_9", "3337_4", "2730_9", 
+#     "2835_9", "592_9", "2111_9", "3125_4", "725_4", 
+#     "1210_4", "1350_4"
+# ]
+    for n in range(len(dsec)):
+        print(n)
+        data = dsec[n]
+
+
+    # for n in range(len(dsec)):
+    #     # start_time = time.time()
+    #     dat = dsec[n]
+    #     # end_time = time.time()
+    #     # print('time cost', end_time - start_time)
+    #     # print(dat['flow_data'][0]['events_stmp'], dat['flow_data'][0]['lidar_stmp'])
+    #     print('flow_lidar',dat['flow_data'][0]['flow_lidar'][0][0].shape)
+    #     # if len(dat['gt_names']) > 1:
+    #     #     print(dat['gt_names'])
     pass

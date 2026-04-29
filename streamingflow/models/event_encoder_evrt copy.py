@@ -127,27 +127,21 @@ class EventEncoderEvRT(nn.Module):
         if fusion_mode not in {"sum", "concat"}:
             raise ValueError(f"Unsupported MULTISCALE_FUSION={fusion_mode}")
         self.multiscale_fusion = fusion_mode
-        depth_bins = int(getattr(cfg, "DEPTH_BINS", 48))
-
-        self.depth_head = DepthEncoder(
-                in_channels=out_channels,
-                D=depth_bins,
+        use_depth_head = getattr(cfg, "USE_DEPTH_HEAD", False)
+        if use_depth_head:
+            depth_bins = int(getattr(cfg, "DEPTH_BINS", 80))
+            depth_hidden = int(getattr(cfg, "DEPTH_HEAD_CHANNELS", 128))
+            skip_channels = hybrid_hidden if len(in_channels_list) > 1 else 0
+            self.depth_head = EventDepthHead(
+                in_channels=hybrid_hidden,
+                skip_channels=skip_channels,
+                hidden_channels=depth_hidden,
+                depth_bins=depth_bins,
             )
-        # use_depth_head = getattr(cfg, "USE_DEPTH_HEAD", False)
-        # if use_depth_head:
-        #     depth_bins = int(getattr(cfg, "DEPTH_BINS", 80))
-        #     depth_hidden = int(getattr(cfg, "DEPTH_HEAD_CHANNELS", 128))
-        #     skip_channels = hybrid_hidden if len(in_channels_list) > 1 else 0
-        #     self.depth_head = EventDepthHead(
-            #     in_channels=hybrid_hidden,
-            #     skip_channels=skip_channels,
-            #     hidden_channels=depth_hidden,
-            #     depth_bins=depth_bins,
-            # )
-        # else:
-        #     self.depth_head = None
+        else:
+            self.depth_head = None
 
-    def forward(self, x: torch.Tensor, depth_image) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         """
         Args:
             x: Tensor of shape (B, C_evt, H, W)
@@ -219,14 +213,14 @@ class EventEncoderEvRT(nn.Module):
 
         out = self.output_proj(fused)# [20,64,40,60]
         # _validate_tensor(out, "EventEncoderEvRT output_proj output")
-        out, depth = self.depth_head(out,depth_image)
-        # depth_logits: Optional[torch.Tensor] = None
-        # if self.depth_head is not None:
-        #     skip_feat = encoded[1] if len(encoded) > 1 else None
-        #     depth_logits = self.depth_head(p3, skip_feat)# [20,80,40,60]
-        #     if depth_logits is not None:
-        #         _validate_tensor(depth_logits, "EventEncoderEvRT depth_head output")
-        return out, depth
+        
+        depth_logits: Optional[torch.Tensor] = None
+        if self.depth_head is not None:
+            skip_feat = encoded[1] if len(encoded) > 1 else None
+            depth_logits = self.depth_head(p3, skip_feat)# [20,80,40,60]
+            if depth_logits is not None:
+                _validate_tensor(depth_logits, "EventEncoderEvRT depth_head output")
+        return out, depth_logits
 
 
 class EventDepthHead(nn.Module):
@@ -273,8 +267,8 @@ class EventDepthHead(nn.Module):
         return self.output_proj(x)
 
 
-class DepthEncoder(nn.Module):
-    def __init__(self, in_channels, D, with_cp=False):
+class Encoder(nn.Module):
+    def __init__(self, in_channels, out_channels, D, with_cp=False):
         super().__init__()
         self.D = D
 
@@ -285,15 +279,12 @@ class DepthEncoder(nn.Module):
                 nn.Conv2d(8, 32, 5, stride=4, padding=2),
                 nn.BatchNorm2d(32),
                 nn.ReLU(True),
-                nn.Conv2d(32, 64, 5, stride=4, padding=2),
-                nn.BatchNorm2d(64),
-                nn.ReLU(True),
-                nn.Conv2d(64, self.D, 5, stride=2, padding=2),
+                nn.Conv2d(32, self.D, 5, stride=int(2 * self.downsample / 8),
+                          padding=2),
                 nn.BatchNorm2d(self.D),
                 nn.ReLU(True))
-        out_channels = in_channels+D
         self.depth_net = nn.Sequential(
-                nn.Conv2d(in_channels + D, in_channels, 3, padding=1),
+                nn.Conv2d(in_channels + 64, in_channels, 3, padding=1),
                 nn.BatchNorm2d(in_channels),
                 nn.ReLU(True),
                 nn.Conv2d(in_channels, in_channels, 3, padding=1),
@@ -301,15 +292,12 @@ class DepthEncoder(nn.Module):
                 nn.ReLU(True),
                 nn.Conv2d(in_channels, out_channels, 1))
 
-    def forward(self, img, depth_image):
-        N, C, H, W = img.shape
-        B = depth_image.shape[0]
-        depth_image = depth_image.unsqueeze(1).expand(-1, N//B, -1, -1).contiguous()
-        h_img, w_img = depth_image.shape[2:]
-        depth_image = depth_image.view(N, 1, h_img, w_img)
-        depth = self.lidar_input_net(depth_image)# [10, 64, 24, 68]
+    def forward(self, img, depth):
+        B, N, C, H, W = img.shape
+        img = img.view(B * N, C, H, W)
+        depth = depth.unsqueeze(1).expand(-1, N, -1, -1)
+        h_img, w_img = depth.shape[2:]
+        depth = depth.view(B, 1, h_img, w_img)
+        depth = self.lidar_input_net(depth)# [10, 64, 24, 68]
         img = torch.cat([img, depth], dim=1)# x:[10, 128, 24, 68]->[10, 192, 24, 68]
-        img = self.depth_net(img)
-        depth = img[:,:self.D, ...]
-        out = img[:,self.D:, ...]
-        return out, depth
+        
